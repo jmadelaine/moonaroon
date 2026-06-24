@@ -1,0 +1,108 @@
+:root {
+  --bg: #171a1c;       /* page canvas (white -> charcoal) */
+  --surface: #202527;  /* elevated row */
+  --fg: #f1f3f4;       /* primary text */
+  --muted: #929fa5;    /* secondary text */
+  --accent: #0e74dd;   /* Garoon primary blue */
+  --track: #3e474c;    /* switch track / borders */
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  width: 260px;
+  padding: 16px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.moon {
+  width: 28px;
+  height: 28px;
+  display: block;
+  border-radius: 50%;
+}
+
+.titles h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.titles p {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  background: var(--surface);
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.label-text {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 52px;
+  height: 28px;
+  flex-shrink: 0;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  inset: 0;
+  background: var(--track);
+  border-radius: 28px;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* Knob = the moon icon. */
+.slider::before {
+  content: "";
+  position: absolute;
+  height: 22px;
+  width: 22px;
+  left: 3px;
+  top: 3px;
+  border-radius: 50%;
+  background: #fff url("icons/moon.svg") center / cover no-repeat;
+  transition: transform 0.2s ease;
+}
+
+/* On: the track lights up white and glows; the moon slides across. */
+.switch input:checked + .slider {
+  background: #fff;
+  box-shadow: 0 0 10px 2px rgba(255, 255, 255, 0.65), 0 0 3px rgba(255, 255, 255, 0.9);
+}
+
+.switch input:checked + .slider::before {
+  transform: translateX(24px);
+}
