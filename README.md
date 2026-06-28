@@ -23,12 +23,12 @@ The toggle applies live — no reload needed.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `manifest.json` | Manifest V3 config |
-| `content.js` | Fetches, remaps and reinjects the site's stylesheets |
-| `popup.html` / `popup.css` / `popup.js` | Toolbar popup with the toggle |
-| `icons/` | Moon icons (16/32/48/128) |
+| File                                    | Purpose                                              |
+| --------------------------------------- | ---------------------------------------------------- |
+| `manifest.json`                         | Manifest V3 config                                   |
+| `content.js`                            | Fetches, remaps and reinjects the site's stylesheets |
+| `popup.html` / `popup.css` / `popup.js` | Toolbar popup with the toggle                        |
+| `icons/`                                | Moon icons (16/32/48/128)                            |
 
 ## Tweaking the look
 

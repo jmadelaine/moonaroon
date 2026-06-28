@@ -11,8 +11,8 @@
 
 const STYLE_ID = "moonaroon-base-style";
 const STORAGE_KEY = "moonaroonEnabled";
-const PROCESSED = "data-moonaroon";       // marks links/styles/elements we've handled
-const GEN = "data-moonaroon-gen";          // marks <style> nodes we injected
+const PROCESSED = "data-moonaroon"; // marks links/styles/elements we've handled
+const GEN = "data-moonaroon-gen"; // marks <style> nodes we injected
 
 // Site-specific fixes for elements Garoon already styles dark in light mode —
 // lightness-inversion wrongly flips these *light*, so we restore them by hand.
@@ -59,9 +59,14 @@ const OVERRIDES = `
 // Color math
 // ---------------------------------------------------------------------------
 function rgbToHsl(r, g, b) {
-  r /= 255; g /= 255; b /= 255;
-  const max = Math.max(r, g, b), min = Math.min(r, g, b);
-  let h = 0, s = 0; const l = (max + min) / 2;
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  const max = Math.max(r, g, b),
+    min = Math.min(r, g, b);
+  let h = 0,
+    s = 0;
+  const l = (max + min) / 2;
   if (max !== min) {
     const d = max - min;
     s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
@@ -74,9 +79,13 @@ function rgbToHsl(r, g, b) {
 }
 
 function hslToRgb(h, s, l) {
-  if (s === 0) { const v = Math.round(l * 255); return [v, v, v]; }
+  if (s === 0) {
+    const v = Math.round(l * 255);
+    return [v, v, v];
+  }
   const hue2rgb = (p, q, t) => {
-    if (t < 0) t += 1; if (t > 1) t -= 1;
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
     if (t < 1 / 6) return p + (q - p) * 6 * t;
     if (t < 1 / 2) return q;
     if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
@@ -94,7 +103,7 @@ function hslToRgb(h, s, l) {
 // Charcoal tint for neutrals: a cool blue-gray (hue ~200°, gently desaturated)
 // instead of a flat gray, so dark surfaces read as charcoal rather than black.
 const NEUTRAL_HUE = 200 / 360;
-const NEUTRAL_SAT = 0.10;
+const NEUTRAL_SAT = 0.1;
 
 // Map one light-theme color to its dark equivalent — NEUTRALS + PALE TINTS only.
 // Returns null to signal "leave this color exactly as it is" (saturated colors).
@@ -118,28 +127,47 @@ const COLOR_RE =
 // Named CSS neutrals — the regex above only catches hex / rgb(), so these
 // would otherwise stay flat gray / white / black.
 const NAMED = {
-  white: [255, 255, 255], black: [0, 0, 0], gray: [128, 128, 128], grey: [128, 128, 128],
-  silver: [192, 192, 192], gainsboro: [220, 220, 220], whitesmoke: [245, 245, 245],
-  lightgray: [211, 211, 211], lightgrey: [211, 211, 211], darkgray: [169, 169, 169],
-  darkgrey: [169, 169, 169], dimgray: [105, 105, 105], dimgrey: [105, 105, 105],
+  white: [255, 255, 255],
+  black: [0, 0, 0],
+  gray: [128, 128, 128],
+  grey: [128, 128, 128],
+  silver: [192, 192, 192],
+  gainsboro: [220, 220, 220],
+  whitesmoke: [245, 245, 245],
+  lightgray: [211, 211, 211],
+  lightgrey: [211, 211, 211],
+  darkgray: [169, 169, 169],
+  darkgrey: [169, 169, 169],
+  dimgray: [105, 105, 105],
+  dimgrey: [105, 105, 105],
 };
 // Match a keyword only as a standalone token. \b is wrong here because it treats
 // "-" as a boundary, so it would corrupt the color word inside CSS custom property
 // identifiers like `--c-gray` or `var(--component-color-border-gray)` — breaking
 // the reference and reflowing the layout. Require no adjacent word char or hyphen.
-const NAMED_RE = new RegExp("(?<![\\w-])(" + Object.keys(NAMED).join("|") + ")(?![\\w-])", "gi");
+const NAMED_RE = new RegExp(
+  "(?<![\\w-])(" + Object.keys(NAMED).join("|") + ")(?![\\w-])",
+  "gi",
+);
 
 function parseHex(h) {
   h = h.slice(1);
   if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  return [
+    parseInt(h.slice(0, 2), 16),
+    parseInt(h.slice(2, 4), 16),
+    parseInt(h.slice(4, 6), 16),
+  ];
 }
 const toHex = (n) => n.toString(16).padStart(2, "0");
 
 // Replace every color token in a string with its dark equivalent.
 function remapColors(value) {
   value = value.replace(COLOR_RE, (tok) => {
-    let r, g, b, a = null;
+    let r,
+      g,
+      b,
+      a = null;
     if (tok[0] === "#") {
       [r, g, b] = parseHex(tok);
     } else {
@@ -157,7 +185,9 @@ function remapColors(value) {
     const out = remapRgb(r, g, b);
     if (!out) return tok; // saturated -> keep
     const [nr, ng, nb] = out;
-    return a === null ? `#${toHex(nr)}${toHex(ng)}${toHex(nb)}` : `rgba(${nr}, ${ng}, ${nb}, ${a})`;
+    return a === null
+      ? `#${toHex(nr)}${toHex(ng)}${toHex(nb)}`
+      : `rgba(${nr}, ${ng}, ${nb}, ${a})`;
   });
   // Named neutrals. (Callers protect quoted strings / urls so we only hit
   // genuine color keywords, never font names or content.)
@@ -172,7 +202,11 @@ function remapColors(value) {
 // ---------------------------------------------------------------------------
 function absUrl(u, base) {
   if (/^(data:|https?:|\/\/|#)/i.test(u)) return null; // already absolute / inline
-  try { return new URL(u, base).href; } catch (e) { return null; }
+  try {
+    return new URL(u, base).href;
+  } catch (e) {
+    return null;
+  }
 }
 
 // Rewrite a whole stylesheet's text: absolutize urls, remap colors inside
@@ -180,18 +214,27 @@ function absUrl(u, base) {
 // contents of url(...) (which may embed colors in data: SVGs).
 function transformCss(text, baseHref) {
   // Absolutize @import urls (they live outside declaration blocks).
-  text = text.replace(/@import\s+url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (m, q, u) => {
-    const abs = absUrl(u, baseHref);
-    return abs ? `@import url("${abs}")` : m;
-  });
+  text = text.replace(
+    /@import\s+url\(\s*(['"]?)([^'")]+)\1\s*\)/gi,
+    (m, q, u) => {
+      const abs = absUrl(u, baseHref);
+      return abs ? `@import url("${abs}")` : m;
+    },
+  );
   // Remap colors only within { ... } declaration blocks (innermost match first,
   // so @media / @keyframes wrappers are skipped and selectors are never hit).
-  return text.replace(/\{([^{}]*)\}/g, (m, body) => "{" + remapDecls(body, baseHref) + "}");
+  return text.replace(
+    /\{([^{}]*)\}/g,
+    (m, body) => "{" + remapDecls(body, baseHref) + "}",
+  );
 }
 
 function remapDecls(body, baseHref) {
   const stash = [];
-  const hold = (s) => { stash.push(s); return "\uE000" + (stash.length - 1) + "\uE001"; };
+  const hold = (s) => {
+    stash.push(s);
+    return "\uE000" + (stash.length - 1) + "\uE001";
+  };
   // Absolutize + protect url(...) so its contents aren't treated as colors.
   body = body.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (m, q, u) => {
     const abs = absUrl(u, baseHref);
@@ -211,15 +254,25 @@ function remapDecls(body, baseHref) {
 // ---------------------------------------------------------------------------
 let observer = null;
 let retryTimers = [];
-const injectedStyles = [];     // <style> nodes we added
-const disabledLinks = [];      // original <link> nodes we disabled
+const injectedStyles = []; // <style> nodes we added
+const disabledLinks = []; // original <link> nodes we disabled
 const styleOriginals = new Map(); // page <style> -> original text
-const OBS_OPTS = { childList: true, subtree: true, attributes: true, attributeFilter: ["style"] };
+const OBS_OPTS = {
+  childList: true,
+  subtree: true,
+  attributes: true,
+  attributeFilter: ["style"],
+};
 
 function withPaused(fn) {
   if (observer) observer.disconnect();
-  try { fn(); } finally {
-    if (observer) { observer.takeRecords(); observer.observe(document.documentElement, OBS_OPTS); }
+  try {
+    fn();
+  } finally {
+    if (observer) {
+      observer.takeRecords();
+      observer.observe(document.documentElement, OBS_OPTS);
+    }
   }
 }
 
@@ -277,14 +330,23 @@ function processInlineStyles(root) {
     // like `background:` or `border-color:` sets the longhands, so reading the
     // longhand catches the same color; processing both would remap it twice
     // (e.g. background:#fff -> dark -> light again).
-    for (const prop of ["color", "background-color",
-      "border-top-color", "border-right-color", "border-bottom-color",
-      "border-left-color", "outline-color", "fill", "stroke"]) {
+    for (const prop of [
+      "color",
+      "background-color",
+      "border-top-color",
+      "border-right-color",
+      "border-bottom-color",
+      "border-left-color",
+      "outline-color",
+      "fill",
+      "stroke",
+    ]) {
       const val = el.style.getPropertyValue(prop);
       if (!val) continue;
       const next = remapColors(val);
       if (next !== val) {
-        el.dataset.moonaroonOrig = (el.dataset.moonaroonOrig || "") + `${prop}::${val}||`;
+        el.dataset.moonaroonOrig =
+          (el.dataset.moonaroonOrig || "") + `${prop}::${val}||`;
         el.style.setProperty(prop, next, el.style.getPropertyPriority(prop));
         changed = true;
       }
@@ -296,12 +358,16 @@ function processInlineStyles(root) {
 function scan() {
   // Synchronous DOM rewrites (page <style> + inline attrs) — pause observer.
   withPaused(() => {
-    document.querySelectorAll(`style:not([${GEN}]):not([${PROCESSED}])`).forEach(processStyleEl);
+    document
+      .querySelectorAll(`style:not([${GEN}]):not([${PROCESSED}])`)
+      .forEach(processStyleEl);
     processInlineStyles(document);
   });
   // Stylesheet links — async fetch; our injected nodes carry GEN so the
   // observer ignores them, so no pause needed here.
-  document.querySelectorAll("link[rel~='stylesheet']").forEach((l) => processLink(l));
+  document
+    .querySelectorAll("link[rel~='stylesheet']")
+    .forEach((l) => processLink(l));
 }
 
 function applyDark() {
@@ -313,27 +379,38 @@ function applyDark() {
   // background matches the themed surfaces instead of being a flat gray.
   const [cr, cg, cb] = remapRgb(255, 255, 255);
   const canvas = `#${toHex(cr)}${toHex(cg)}${toHex(cb)}`;
-  base.textContent = `html { background:${canvas} !important; } body { background:${canvas} !important; }` + OVERRIDES;
+  base.textContent = `html { background:${canvas}; }` + OVERRIDES;
   (document.head || document.documentElement).appendChild(base);
 
   scan();
 
   observer = new MutationObserver((mutations) => {
-    const styleEls = [], inlineRoots = [], links = [];
+    const styleEls = [],
+      inlineRoots = [],
+      links = [];
     for (const m of mutations) {
       for (const node of m.addedNodes) {
         if (node.nodeType !== 1 || node.getAttribute(GEN)) continue;
-        if (node.tagName === "LINK" && /stylesheet/i.test(node.rel || "")) links.push(node);
+        if (node.tagName === "LINK" && /stylesheet/i.test(node.rel || ""))
+          links.push(node);
         else if (node.tagName === "STYLE") styleEls.push(node);
         if (node.querySelectorAll) {
-          node.querySelectorAll("link[rel~='stylesheet']").forEach((l) => links.push(l));
-          node.querySelectorAll(`style:not([${GEN}])`).forEach((s) => styleEls.push(s));
+          node
+            .querySelectorAll("link[rel~='stylesheet']")
+            .forEach((l) => links.push(l));
+          node
+            .querySelectorAll(`style:not([${GEN}])`)
+            .forEach((s) => styleEls.push(s));
         }
         inlineRoots.push(node);
       }
-      if (m.type === "attributes" && m.target.nodeType === 1 &&
-          m.target.tagName !== "STYLE" && m.target.tagName !== "LINK" &&
-          !m.target.getAttribute(GEN)) {
+      if (
+        m.type === "attributes" &&
+        m.target.nodeType === 1 &&
+        m.target.tagName !== "STYLE" &&
+        m.target.tagName !== "LINK" &&
+        !m.target.getAttribute(GEN)
+      ) {
         m.target.removeAttribute(PROCESSED);
         delete m.target.dataset.moonaroonOrig;
         inlineRoots.push(m.target);
@@ -355,7 +432,10 @@ function applyDark() {
 function removeDark() {
   const base = document.getElementById(STYLE_ID);
   if (base) base.remove();
-  if (observer) { observer.disconnect(); observer = null; }
+  if (observer) {
+    observer.disconnect();
+    observer = null;
+  }
   document.removeEventListener("DOMContentLoaded", scan);
   window.removeEventListener("load", scan);
   retryTimers.forEach(clearTimeout);
@@ -363,9 +443,17 @@ function removeDark() {
 
   for (const style of injectedStyles) style.remove();
   injectedStyles.length = 0;
-  for (const link of disabledLinks) { try { link.disabled = false; } catch (e) {} link.removeAttribute(PROCESSED); }
+  for (const link of disabledLinks) {
+    try {
+      link.disabled = false;
+    } catch (e) {}
+    link.removeAttribute(PROCESSED);
+  }
   disabledLinks.length = 0;
-  for (const [style, orig] of styleOriginals) { style.textContent = orig; style.removeAttribute(PROCESSED); }
+  for (const [style, orig] of styleOriginals) {
+    style.textContent = orig;
+    style.removeAttribute(PROCESSED);
+  }
   styleOriginals.clear();
 
   for (const el of document.querySelectorAll(`[${PROCESSED}]`)) {
@@ -387,9 +475,12 @@ function sync(enabled) {
 }
 
 // Initial state
-chrome.storage.sync.get({ [STORAGE_KEY]: false }, (res) => sync(res[STORAGE_KEY]));
+chrome.storage.sync.get({ [STORAGE_KEY]: false }, (res) =>
+  sync(res[STORAGE_KEY]),
+);
 
 // React to toggles from the popup live
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "sync" && changes[STORAGE_KEY]) sync(changes[STORAGE_KEY].newValue);
+  if (area === "sync" && changes[STORAGE_KEY])
+    sync(changes[STORAGE_KEY].newValue);
 });
