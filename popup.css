@@ -3,7 +3,7 @@
   --surface: #202527; /* elevated row */
   --fg: #f1f3f4; /* primary text */
   --muted: #929fa5; /* secondary text */
-  --accent: #0e74dd; /* Garoon primary blue */
+  --accent: #3599ff; /* Garoon primary blue as remapRgb vivifies it; unused */
   --track: #3e474c; /* switch track / borders */
 }
 
