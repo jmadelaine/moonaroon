@@ -890,15 +890,15 @@ const SPLASH_RAMP = [
 const MOON_SVG = `<svg viewBox="0 0 600 600" width="100%" height="100%" style="display:block" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
 <defs><clipPath id="moonaroon-splash-clip"><circle cx="300" cy="300" r="300"/></clipPath></defs>
 <g clip-path="url(#moonaroon-splash-clip)">
-<rect x="0" y="0" width="600" height="600" fill="#f5dd8a"/>
-<circle cx="150" cy="90" r="72" fill="#dbb655"/>
-<circle cx="245" cy="175" r="30" fill="#dbb655"/>
-<circle cx="510" cy="135" r="52" fill="#dbb655"/>
-<circle cx="95" cy="290" r="44" fill="#dbb655"/>
-<circle cx="135" cy="470" r="84" fill="#dbb655"/>
-<circle cx="445" cy="510" r="40" fill="#dbb655"/>
-<circle cx="535" cy="430" r="58" fill="#dbb655"/>
-<path d="M 165 415 L 165 190 L 300 340 L 435 190 L 435 415" fill="none" stroke="#a8812c" stroke-width="82" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="0" y="0" width="600" height="600" fill="#fce183"/>
+<circle cx="150" cy="90" r="72" fill="#e8bc48"/>
+<circle cx="245" cy="175" r="30" fill="#e8bc48"/>
+<circle cx="510" cy="135" r="52" fill="#e8bc48"/>
+<circle cx="95" cy="290" r="44" fill="#e8bc48"/>
+<circle cx="135" cy="470" r="84" fill="#e8bc48"/>
+<circle cx="445" cy="510" r="40" fill="#e8bc48"/>
+<circle cx="535" cy="430" r="58" fill="#e8bc48"/>
+<path d="M 165 415 L 165 190 L 300 340 L 435 190 L 435 415" fill="none" stroke="#b6861e" stroke-width="82" stroke-linecap="round" stroke-linejoin="round"/>
 </g></svg>`;
 
 // Whether this toggle is a splash toggle. Deliberately frame-agnostic: every

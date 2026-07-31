@@ -22,6 +22,23 @@ function render(enabled) {
     : OFF_LABEL;
 }
 
+// Prefill the issue with the version and browser, so a report says which build it
+// came from. The anchor's plain href already works on its own if this doesn't run.
+const report = document.getElementById("report");
+const body = [
+  "**What happened?**",
+  "",
+  "",
+  "**Where?** (Garoon / Kintone, and which screen)",
+  "",
+  "",
+  `Moonaroon ${chrome.runtime.getManifest().version}`,
+  navigator.userAgent,
+].join("\n");
+report.href =
+  "https://github.com/jmadelaine/moonaroon/issues/new" +
+  `?labels=bug&body=${encodeURIComponent(body)}`;
+
 // Load current state
 chrome.storage.sync.get({ [STORAGE_KEY]: false }, (res) => {
   render(res[STORAGE_KEY]);
