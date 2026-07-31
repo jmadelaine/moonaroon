@@ -840,18 +840,161 @@ function removeDark() {
   }
 }
 
-function sync(enabled) {
-  if (enabled) applyDark();
-  else removeDark();
+// ---------------------------------------------------------------------------
+// Toggle-on splash
+// ---------------------------------------------------------------------------
+// A moon spins out of the centre of the window, grows until it covers
+// everything, then fades. The theme is applied at the moment of full cover, so
+// the swap from light to dark happens hidden behind the moon.
+const SPLASH_ID = "moonaroon-splash";
+const SPLASH_MS = 1000;
+const SPLASH_COVER = 0.72; // fraction of the run at which the moon covers the window
+let splashTimer = null;
+
+// The growth and spin curve, sampled into segments the animation walks linearly.
+//
+// **Every segment must be faster than the one before it, including the last.**
+// The moon has to read as still rushing at the viewer when it vanishes, so
+// nothing here may ease out, and no segment may even hold steady — a rate that
+// stops climbing looks like the moon braking just short of the screen. Sampling
+// is what makes that checkable: the rate of a segment is
+// `(next - current) / (next offset - current offset)`, so it can be read off the
+// table. A bezier can't be checked by eye, and most of them flatten at the end.
+//
+// `scale: 1` is exactly window-covering (see `size` in `playSplash`), so the
+// `SPLASH_COVER` row must be 1 — that frame is what `applyDark` hides behind.
+// Everything past it is off-screen overshoot, seen only through the crater
+// texture streaming outwards, which is what sells the last few frames.
+// Spin climbs far more gently than scale — roughly 610°/s to 1375°/s across the
+// whole run, where scale goes up by 250×. They are separate curves on purpose:
+// the zoom is what should feel like it's accelerating at you, and a spin that
+// accelerates to match just reads as a frantic blur.
+// prettier-ignore
+const SPLASH_RAMP = [
+  // offset,      scale, spin°, opacity (null = interpolate)
+  [0,             0.03,      0, 1],
+  [0.18,          0.06,    110, null],
+  [0.34,          0.11,    220, null],
+  [0.48,          0.2,     330, null],
+  [0.6,           0.38,    440, null],
+  [0.68,          0.65,    520, null],
+  [SPLASH_COVER,  1,       565, null], // covers the window; theme swaps here
+  [0.84,          2.3,     710, 1],    // fade starts after cover, so it's a wipe
+  [0.92,          3.6,     815, null],
+  [1,             7,       925, 0],
+];
+
+// Inlined rather than loaded from icons/moon.svg: an extension URL would need a
+// web_accessible_resources entry and can still be blocked by the page's CSP.
+// The clip-path id is namespaced because it resolves against the whole document.
+const MOON_SVG = `<svg viewBox="0 0 600 600" width="100%" height="100%" style="display:block" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+<defs><clipPath id="moonaroon-splash-clip"><circle cx="300" cy="300" r="300"/></clipPath></defs>
+<g clip-path="url(#moonaroon-splash-clip)">
+<rect x="0" y="0" width="600" height="600" fill="#f5dd8a"/>
+<circle cx="150" cy="90" r="72" fill="#dbb655"/>
+<circle cx="245" cy="175" r="30" fill="#dbb655"/>
+<circle cx="510" cy="135" r="52" fill="#dbb655"/>
+<circle cx="95" cy="290" r="44" fill="#dbb655"/>
+<circle cx="135" cy="470" r="84" fill="#dbb655"/>
+<circle cx="445" cy="510" r="40" fill="#dbb655"/>
+<circle cx="535" cy="430" r="58" fill="#dbb655"/>
+<path d="M 165 415 L 165 190 L 300 340 L 435 190 L 435 415" fill="none" stroke="#a8812c" stroke-width="82" stroke-linecap="round" stroke-linejoin="round"/>
+</g></svg>`;
+
+// Whether this toggle is a splash toggle. Deliberately frame-agnostic: every
+// frame must agree, because a subframe has to hold its own theme apply until the
+// moon covers the window even though only the top frame draws the moon. Each
+// condition reads the same in a subframe — visibilityState reflects the tab, and
+// the media query reflects the OS.
+function splashWanted() {
+  return (
+    // Storage changes broadcast to every open Cybozu tab, not just the one the
+    // popup was opened over. A hidden tab has nobody to entertain.
+    document.visibilityState === "visible" &&
+    !matchMedia("(prefers-reduced-motion: reduce)").matches &&
+    typeof Element.prototype.animate === "function"
+  );
 }
 
-// Initial state
+// Hold the theme until the moon covers the window. Shared by both frame roles so
+// the whole page — top document and every iframe — flips at the same instant.
+function applyAtCover() {
+  splashTimer = setTimeout(() => {
+    splashTimer = null;
+    applyDark();
+  }, SPLASH_MS * SPLASH_COVER);
+}
+
+function clearSplash() {
+  if (splashTimer) {
+    clearTimeout(splashTimer);
+    splashTimer = null;
+  }
+  const el = document.getElementById(SPLASH_ID);
+  if (el) withPaused(() => el.remove());
+}
+
+function playSplash() {
+  const el = document.createElement("div");
+  el.id = SPLASH_ID;
+  el.setAttribute(GEN, "1"); // ours — the remapper must not theme the moon
+  // The moon is a circle, so covering a rectangular viewport takes a diameter
+  // of at least its diagonal.
+  const size = Math.hypot(window.innerWidth, window.innerHeight) * 1.06;
+  el.style.cssText =
+    `position:fixed;left:50%;top:50%;width:${size}px;height:${size}px;` +
+    `margin:0;padding:0;border:0;pointer-events:none;` +
+    `z-index:2147483647;will-change:transform,opacity;`;
+  el.innerHTML = MOON_SVG;
+  withPaused(() => (document.body || document.documentElement).appendChild(el));
+
+  // Web Animations rather than a @keyframes <style>: no extra injected node and
+  // no animation-name that could collide with the page's own keyframes.
+  const frames = SPLASH_RAMP.map(([offset, scale, spin, opacity]) => {
+    const frame = {
+      offset,
+      transform: `translate(-50%,-50%) rotate(${spin}deg) scale(${scale})`,
+      // Linear between samples, so the ramp above is the whole story — the speed
+      // of each segment is exactly what it looks like.
+      easing: "linear",
+    };
+    // Omitted rather than null: opacity then interpolates between the frames
+    // that do set it, which is how the fade gets its own timing.
+    if (opacity !== null) frame.opacity = opacity;
+    return frame;
+  });
+  const anim = el.animate(frames, { duration: SPLASH_MS, fill: "forwards" });
+
+  applyAtCover();
+
+  const done = () => {
+    if (el.isConnected) withPaused(() => el.remove());
+  };
+  anim.addEventListener("finish", done);
+  anim.addEventListener("cancel", done);
+}
+
+function sync(enabled, animate) {
+  clearSplash();
+  if (!enabled) {
+    removeDark();
+    return;
+  }
+  if (!animate || !splashWanted()) applyDark();
+  // all_frames means every Garoon iframe runs this script. Only the top frame
+  // draws the moon — otherwise one toggle spawns a moon per iframe — but the
+  // frames still wait for cover, so they don't visibly turn dark ahead of it.
+  else if (window.top === window) playSplash();
+  else applyAtCover();
+}
+
+// Initial state — no splash, the page was already loading dark.
 chrome.storage.sync.get({ [STORAGE_KEY]: false }, (res) =>
-  sync(res[STORAGE_KEY]),
+  sync(res[STORAGE_KEY], false),
 );
 
 // React to toggles from the popup live
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "sync" && changes[STORAGE_KEY])
-    sync(changes[STORAGE_KEY].newValue);
+    sync(changes[STORAGE_KEY].newValue, true);
 });
