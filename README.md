@@ -1,6 +1,17 @@
-# Moonaroon 🌙
+# Moonaroon 🌕
 
-A Chrome extension that toggles a coherent dark mode on **any `*.cybozu.com` site** — both **Garoon** (`/g/`) and **Kintone** (`/k/`).
+A Chrome extension that toggles dark mode on **any `*.cybozu.com` site**.
+
+## How to install
+
+1. **Download it.** Go to [github.com/jmadelaine/moonaroon](https://github.com/jmadelaine/moonaroon), click the green **"Code"** button near the top-right, then **"Download ZIP"**.
+2. **Unpack it.** Find `moonaroon-main.zip` in your Downloads folder and double-click it (Mac) or right-click → **"Extract All"** (Windows). You get a folder called `moonaroon-main`.
+3. **Open the extensions page.** In Chrome, type `chrome://extensions` in the address bar and press Enter.
+4. **Turn on Developer mode** with the switch in the top-right corner.
+5. **Click "Load unpacked"** (top-left), then select the `moonaroon-main` folder and confirm. Moonaroon now appears in your list of extensions.
+6. **Use it.** Open your Cybozu site (`https://<your-tenant>.cybozu.com`), click the puzzle-piece **Extensions** icon at the top-right of Chrome, pick the yellow moon, and flip the switch.
+
+**To update later:** repeat the steps above, replacing the old folder.
 
 ## How it works
 
@@ -8,13 +19,13 @@ Rather than a blind `invert()` filter, Moonaroon rewrites the colors the site's 
 
 ### The color mapping
 
-Hue is always preserved — so the Cybozu blue stays blue, alert red stays red, and calendar category colors stay distinct — while lightness and saturation are remapped for a dark canvas:
+All of it lives in `remapRgb()`. Hue is always preserved — so the Cybozu blue stays blue, alert red stays red, and calendar category colors stay distinct — while lightness and saturation are remapped for a dark canvas:
 
-- **Neutrals** (grays/whites/blacks) get their lightness inverted onto a charcoal hue.
-- **Pale tints** (light-blue selection backgrounds and the like) become dark tinted surfaces.
-- **Brand and accent colors are taken to full saturation and brightened.** A mid-tone blue that looks fine on white is dull on charcoal, and a dark navy is nearly invisible. Saturation is maxed first, then lightness rises only as far as legibility needs — which lifts blues much further than greens, since blue carries barely a tenth of green's luminance. Cybozu blue `#0e74dd` becomes `#3599ff`, alert red `#d0021b` becomes `#ff324b`, and a near-invisible navy `#1c3f6e` becomes `#2e84f9`.
+- **Neutrals** (grays/whites/blacks, anything under the `s < 0.12` threshold) get their lightness inverted onto a charcoal hue. The curve `0.95 - l * 0.85` in `neutralFor()` sets the overall darkness — raise the constant for a lighter dark theme — and `NEUTRAL_HUE` / `NEUTRAL_SAT` set the charcoal tint.
+- **Pale tints** (`l > 0.8` — light-blue selection backgrounds and the like) become dark tinted surfaces.
+- **Brand and accent colors are taken to full saturation and brightened.** A mid-tone blue that looks fine on white is dull on charcoal, and a dark navy is nearly invisible. Saturation is maxed first, then lightness rises only as far as legibility needs — which lifts blues much further than greens, since blue carries barely a tenth of green's luminance. Cybozu blue `#0e74dd` becomes `#3599ff`, alert red `#d0021b` becomes `#ff324b`, and a near-invisible navy `#1c3f6e` becomes `#2e84f9`. How far this goes is the `VIVID_*` constants and `MIN_CONTRAST` in `vividFor()`: saturation is the lever for vividness, lightness only for legibility — pushed too high, greens and olives go milky instead of bright.
 
-Shadows are never read at all, and translucent near-black or near-white is left alone, so scrims and overlays don't turn into a white veil.
+Shadows are never read at all, and translucent near-black or near-white is left alone, so scrims and overlays don't turn into a white veil. Background **images** with light colors painted into them aren't remapped either — there's no color token to rewrite, so those need a separate `filter` rule.
 
 ### Reading the stylesheets
 
@@ -32,6 +43,8 @@ Two cases work differently:
 
 - **`<style>` elements** are same-origin, so their live CSSOM is read directly with no fetch. Their `textContent` is never written to — doing that makes the browser re-parse the element and wipe rules a CSS-in-JS library added through `insertRule`, which is what makes Kintone's styled-components colors reachable at all.
 - **Inline `style=""` attributes** are rewritten in place, since nothing outranks them short of `!important`. The original values are stashed so they can be restored.
+
+Which properties get read is `DIRECT_COLOR` (single-color values) and `COMPOSITE_COLOR` (values with colors inside them, like gradients); add to those to reach more. No color-keyword list is needed — named colors are resolved by the parser already.
 
 ### Keeping up with the page
 
@@ -53,34 +66,13 @@ Some things no color remap can get right, so `OVERRIDES` in `content.js` handles
 - **Native form controls**, which take their text color from the browser default and so are invisible to the remap.
 - **Scrollbars**, via `color-scheme: dark` plus `::-webkit-scrollbar` rules. `color-scheme: dark` is also what makes the browser pick the dark branch of any `light-dark()`.
 
-## Install (unpacked)
-
-1. Open `chrome://extensions`.
-2. Enable **Developer mode** (top-right).
-3. Click **Load unpacked** and select this `moonaroon` folder.
-4. Visit your Cybozu site (`https://<your-tenant>.cybozu.com`), click the Moonaroon toolbar icon, and flip the switch.
-
-The toggle applies live — no reload needed.
+If one specific element still looks wrong, this is where to fix it. Use doubled-class selectors (`.x.x`) to beat the site's own `!important`.
 
 ## Files
 
-| File                                    | Purpose                                                                  |
-| --------------------------------------- | ------------------------------------------------------------------------ |
+| File                                    | Purpose                                                                                                                                                                               |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `manifest.json`                         | Manifest V3 config. `all_frames`, plus `host_permissions` for `https://*.cybozu.com/*` — one pattern covering every tenant subdomain and the `static.cybozu.com` CDN the fetches read |
-| `content.js`                            | All theming logic (see above)                                            |
-| `popup.html` / `popup.css` / `popup.js` | Toolbar popup with the toggle                                            |
-| `icons/`                                | Moon icons (16/32/48/128) + `moon.svg` for the popup switch              |
-
-## Tweaking the look
-
-All three branches live in `remapRgb()`.
-
-**Overall darkness.** The neutral curve `0.95 - l * 0.85` in `neutralFor()` controls it — raise the constant for a lighter dark theme. `NEUTRAL_HUE` and `NEUTRAL_SAT` set the charcoal tint. The `s < 0.12` threshold decides what counts as a neutral, and the `l > 0.8` branch handles pale tinted surfaces.
-
-**How much accents pop.** The `VIVID_*` constants and `MIN_CONTRAST` in `vividFor()`. Saturation is the lever for vividness; lightness is only for legibility — pushing lightness too high makes greens and olives go milky instead of bright.
-
-**One specific element still looking wrong.** Add a rule to `OVERRIDES`. Use doubled-class selectors (`.x.x`) there to beat the site's own `!important`.
-
-**Reaching more properties.** Add them to `DIRECT_COLOR` (single-color values) or `COMPOSITE_COLOR` (values with colors inside them, like gradients). No color-keyword list is needed — named colors are resolved by the parser already.
-
-Background **images** with light colors painted into them are not remapped; there's no color token to rewrite, so those need a separate `filter` rule.
+| `content.js`                            | All theming logic (see above)                                                                                                                                                         |
+| `popup.html` / `popup.css` / `popup.js` | Toolbar popup with the toggle                                                                                                                                                         |
+| `icons/`                                | Moon icons (16/32/48/128) + `moon.svg` for the popup switch                                                                                                                           |
