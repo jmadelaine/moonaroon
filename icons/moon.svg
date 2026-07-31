@@ -3,14 +3,14 @@
 <clipPath id="circle"><circle cx="300" cy="300" r="300"/></clipPath>
 </defs>
 <g clip-path="url(#circle)">
-<rect x="0" y="0" width="600" height="600" fill="#9a9a96"/>
-<circle cx="150" cy="90" r="72" fill="#77776f"/>
-<circle cx="245" cy="175" r="30" fill="#77776f"/>
-<circle cx="510" cy="135" r="52" fill="#77776f"/>
-<circle cx="95" cy="290" r="44" fill="#77776f"/>
-<circle cx="135" cy="470" r="84" fill="#77776f"/>
-<circle cx="445" cy="510" r="40" fill="#77776f"/>
-<circle cx="535" cy="430" r="58" fill="#77776f"/>
-<path d="M 430 215 A 150 150 0 1 0 430 385 L 430 320 L 335 320" fill="none" stroke="#656560" stroke-width="82" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="0" y="0" width="600" height="600" fill="#f5dd8a"/>
+<circle cx="150" cy="90" r="72" fill="#dbb655"/>
+<circle cx="245" cy="175" r="30" fill="#dbb655"/>
+<circle cx="510" cy="135" r="52" fill="#dbb655"/>
+<circle cx="95" cy="290" r="44" fill="#dbb655"/>
+<circle cx="135" cy="470" r="84" fill="#dbb655"/>
+<circle cx="445" cy="510" r="40" fill="#dbb655"/>
+<circle cx="535" cy="430" r="58" fill="#dbb655"/>
+<path d="M 165 415 L 165 190 L 300 340 L 435 190 L 435 415" fill="none" stroke="#a8812c" stroke-width="82" stroke-linecap="round" stroke-linejoin="round"/>
 </g>
 </svg>

@@ -79,7 +79,7 @@ ought to win.
 | `manifest.json`                         | MV3 config. `all_frames: true`. `host_permissions`/`matches` are the single pattern `https://*.cybozu.com/*` — a leading `*.` matches the bare host *and* every subdomain, so it covers each tenant plus the `static.cybozu.com` CDN that sheets are fetched from. Sibling domains (`cybozu.cn`, `kintone.com`, `cybozu-dev.com`) are NOT covered; add them explicitly if needed.                                                                                                                                                                               |
 | `content.js`                            | All theming logic (see below).                                                                                                                                                                                                                                                   |
 | `popup.html` / `popup.css` / `popup.js` | Toolbar toggle. Palette mirrors the page charcoal neutrals. The switch knob is `moon.svg`; "on" lights the track white with a glow. There's no separate status line — the label text doubles as it: off reads "Dark mode is off", on picks at random from `ON_LABELS` (re-rolled on every render, so it changes when the popup is reopened too). (`--accent` is defined but currently unused.) |
-| `icons/`                                | `icon{16,32,48,128}.png` (downscale the 128 master with `sips`) + `moon.svg` used in the popup.                                                                                                                                                                                  |
+| `icons/`                                | `moon.svg` — the source of the whole icon: a moon-yellow disc (`#f5dd8a` body, `#dbb655` craters) with an `M` stroked in `#a8812c`. Used directly as the popup switch knob, and the PNGs are rendered from it. `icon{16,32,48,128}.png`: render `moon.svg` in headless Chrome at 128px with `--force-device-scale-factor=4 --default-background-color=00000000` (transparent corners), then downscale that master with `sips -z`. **The same SVG is inlined as `MOON_SVG` in `content.js` — change both together.** |
 
 ## content.js tour
 
@@ -147,6 +147,47 @@ Apply / observe / remove
   `takeRecords()` so our own writes don't feed back in.
 - `removeDark()` — removes injected styles, re-enables originals, restores inline
   styles. Toggling off is fully reversible and live.
+
+Toggle-on splash
+
+- `playSplash()` — a spinning moon grows out of the centre of the window until it
+  covers everything, then fades. 1s, Web Animations (no injected `@keyframes`, so
+  no animation-name collision with the page). The moon is a circle, so the size to
+  cover the viewport is its **diagonal**, not its width.
+- `SPLASH_RAMP` — the growth/spin curve as sampled `[offset, scale, spin, opacity]`
+  rows, walked with `linear` easing. **Every segment must be faster than the one
+  before it, right through the last row**, so the moon still reads as rushing at
+  the viewer when it disappears. Anything that eases out — or merely holds a
+  steady rate — looks like it brakes just short of the screen. Sampling is what
+  makes the rule checkable: a segment's rate is `Δvalue / Δoffset`, readable off
+  the table, where a bezier can't be checked by eye and most flatten at the end.
+  Scale and spin are tuned separately: scale grows by 250× across the run, spin
+  only from ~610°/s to ~1375°/s (2.6 turns total). The zoom is what should feel
+  like it's accelerating at you; a spin that accelerates to match reads as a
+  frantic blur. `scale: 1` is exactly window-covering, so `SPLASH_COVER`'s row
+  must be `1`.
+  Rows past it are off-screen overshoot, seen only as crater texture streaming
+  outwards. `opacity` is `null` on most rows so it interpolates between the rows
+  that set it — that's how the fade gets timing independent of the growth.
+- `applyAtCover()` — holds `applyDark` until `SPLASH_COVER` (72% of the run), so
+  the light-to-dark swap happens hidden behind the moon, like a scene wipe.
+- **Only the top frame draws the moon, but every frame must wait for cover.**
+  `all_frames` gives each Garoon iframe its own copy of this script; if a subframe
+  applied the theme immediately it would visibly flip dark while the moon was
+  still small. So the frame role only decides `playSplash()` vs `applyAtCover()` —
+  both delay by the same amount, and the whole page flips at one instant.
+  `splashWanted()` is therefore deliberately frame-agnostic: visible tabs only (a
+  storage change reaches every open Cybozu tab, not just the one under the popup)
+  and it honours `prefers-reduced-motion`. Both read the same inside a subframe.
+  When it returns false, `applyDark` runs immediately everywhere.
+- `clearSplash()` — drops the pending cover timer and the node, so toggling off
+  mid-animation cancels the theme apply instead of letting it land late. Needed in
+  subframes too, which have a timer but no node.
+- The moon SVG is inlined in `content.js` rather than read from `icons/moon.svg`:
+  an extension URL would need a `web_accessible_resources` entry and can still be
+  blocked by the page's CSP. Its `clipPath` id is namespaced — `url(#id)` resolves
+  against the whole document, so a bare `#circle` could collide with page markup.
+- Toggling **off** is instant, with no animation.
 
 ## Hard-won gotchas (don't relearn these)
 
@@ -319,6 +360,15 @@ Harness details that cost real time:
   computed colors read as transparent for about a tick. Nothing disables links any
   more, but this cost an hour of chasing a revert "bug" that wasn't one — assert
   teardown *after a delay*.
+- **To screenshot the splash, freeze it.** One screenshot per run only catches one
+  moment, and virtual time doesn't let you pick which. Instead call `playSplash`
+  from the driver, then `el.getAnimations()[0].pause()` and set `currentTime` to
+  the frame you want. Note the cover `setTimeout` still fires on its own clock, so
+  the theme may already be applied in a frame taken "early" — a harness artifact.
+- **In headless, `innerHeight` is smaller than `--window-size`'s height**, and
+  `--screenshot` captures the full page. A viewport-centred fixed element is
+  therefore *not* at the centre of the resulting PNG. Read
+  `getBoundingClientRect()` before calling it a positioning bug.
 - **`rgba(0, 0, 0, 0)` reads as "dark"** in any naive lightness check, so
   "transparent because nothing applied" and "correctly themed dark" look
   identical. Report the raw value alongside the verdict.
