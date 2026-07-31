@@ -1,13 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Moonaroon",
-  "version": "0.1.0",
-  "description": "Dark mode for Garoon.",
+  "version": "0.5.0",
+  "description": "Dark mode for Cybozu Garoon and Kintone.",
   "permissions": ["storage", "scripting", "activeTab"],
-  "host_permissions": [
-    "https://bozuman.cybozu.com/*",
-    "https://static.cybozu.com/*"
-  ],
+  "host_permissions": ["https://*.cybozu.com/*"],
   "action": {
     "default_popup": "popup.html",
     "default_title": "Moonaroon — Dark mode for Garoon",
@@ -26,7 +23,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://bozuman.cybozu.com/*"],
+      "matches": ["https://*.cybozu.com/*"],
       "js": ["content.js"],
       "run_at": "document_start",
       "all_frames": true
