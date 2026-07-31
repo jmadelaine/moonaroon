@@ -1,4 +1,4 @@
-// Moonaroon — dark mode for Cybozu (Garoon / Kintone) on any *.cybozu.com host
+// Moonaroon — dark mode for any *.cybozu.com host
 //
 // Colors are remapped in HSL: neutrals invert their lightness onto a charcoal
 // hue, pale tints become dark surfaces, and accents go vivid (see remapRgb).
@@ -29,7 +29,7 @@ const STORAGE_KEY = "moonaroonEnabled";
 const PROCESSED = "data-moonaroon"; // marks links/styles/elements we've handled
 const GEN = "data-moonaroon-gen"; // marks <style> nodes we injected
 
-// Site-specific fixes for elements Garoon already styles dark in light mode —
+// Site-specific fixes for elements the site already styles dark in light mode —
 // lightness-inversion wrongly flips these *light*, so we restore them by hand.
 // The cloud header bar is dark (#4b4a4a) with light text by default.
 const HEADER_BG = "#2d3338"; // charcoal — darker than the inverted result, not black
@@ -570,8 +570,8 @@ function insertOverlay(css, cursor, media, from) {
   style.setAttribute(GEN, "1");
   if (from) style.setAttribute("data-moonaroon-from", from);
   // Keep the source's media scope. Without this a media="print" sheet would
-  // apply on screen — Garoon's print.css forces the header position:static,
-  // which overrides its fixed positioning and breaks the layout.
+  // apply on screen — the print stylesheet forces the cloud header to
+  // position:static, which overrides its fixed positioning and breaks the layout.
   if (media) style.media = media;
   style.textContent = css;
   cursor.node.parentNode.insertBefore(style, cursor.node.nextSibling);
@@ -694,7 +694,7 @@ function withPaused(fn) {
   }
 }
 
-// Rewrite inline style="" attributes (Garoon sets some colors via JS).
+// Rewrite inline style="" attributes (some colors are set via JS at runtime).
 function processInlineStyles(root) {
   const els = root.querySelectorAll ? root.querySelectorAll("[style]") : [];
   for (const el of els) {
@@ -981,7 +981,7 @@ function sync(enabled, animate) {
     return;
   }
   if (!animate || !splashWanted()) applyDark();
-  // all_frames means every Garoon iframe runs this script. Only the top frame
+  // all_frames means every iframe runs this script. Only the top frame
   // draws the moon — otherwise one toggle spawns a moon per iframe — but the
   // frames still wait for cover, so they don't visibly turn dark ahead of it.
   else if (window.top === window) playSplash();

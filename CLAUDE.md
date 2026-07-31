@@ -6,12 +6,17 @@ theming logic — several non-obvious decisions here were paid for with real bug
 ## What this is
 
 **Moonaroon** is a Manifest V3 Chrome extension that applies a coherent dark mode
-to **Cybozu on any `*.cybozu.com` host** — both **Garoon** (`/g/`, classic multi-frame
-app) and **Kintone** (`/k/`, a React/styled-components app). A toolbar popup toggles
-it; state lives in `chrome.storage.sync`. The content script runs at `document_start`
-in **all frames** (Garoon leans heavily on iframes). The two apps stress different
-things — Garoon: many `<link>` sheets, iframes, `media="print"`, already-dark header;
-Kintone: CSS-in-JS, CSS custom properties named after colors. Both are covered below.
+to **any `*.cybozu.com` host**. A toolbar popup toggles it; state lives in
+`chrome.storage.sync`. The content script runs at `document_start` in **all
+frames**.
+
+Two apps under that domain stress very different things, and both are covered
+below. Referred to here by URL path, since that's what's actually observable:
+
+- **`/g/`** — a classic multi-frame app: many `<link>` sheets, iframes,
+  `media="print"`, an already-dark header.
+- **`/k/`** — a React/styled-components app: CSS-in-JS, CSS custom properties
+  named after colors.
 
 ## The core idea (and what it is NOT)
 
@@ -76,9 +81,11 @@ ought to win.
 
 | File                                    | Role                                                                                                                                                                                                                                                                             |
 | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `manifest.json`                         | MV3 config. `all_frames: true`. `host_permissions`/`matches` are the single pattern `https://*.cybozu.com/*` — a leading `*.` matches the bare host *and* every subdomain, so it covers each tenant plus the `static.cybozu.com` CDN that sheets are fetched from. Sibling domains (`cybozu.cn`, `kintone.com`, `cybozu-dev.com`) are NOT covered; add them explicitly if needed.                                                                                                                                                                               |
+| `manifest.json`                         | MV3 config. `all_frames: true`. `host_permissions`/`matches` are the single pattern `https://*.cybozu.com/*` — a leading `*.` matches the bare host *and* every subdomain, so it covers each tenant plus the `static.cybozu.com` CDN that sheets are fetched from. Sibling domains (`cybozu.cn`, `cybozu-dev.com` and the like) are NOT covered; add them explicitly if needed.                                                                                                                                                                               |
 | `content.js`                            | All theming logic (see below).                                                                                                                                                                                                                                                   |
-| `popup.html` / `popup.css` / `popup.js` | Toolbar toggle. Palette mirrors the page charcoal neutrals. The switch knob is `moon.svg`; "on" lights the track white with a glow. There's no separate status line — the label text doubles as it: off reads "Dark mode is off", on picks at random from `ON_LABELS` (re-rolled on every render, so it changes when the popup is reopened too). (`--accent` is defined but currently unused.) A "Found a bug?" link at the right end of the header row opens the repo's GitHub new-issue form; `popup.js` rewrites its `href` to prefill a body with the manifest version and user agent, and the static `href` in the HTML is the fallback if that doesn't run. |
+| `popup.html` / `popup.css` / `popup.js` | Toolbar toggle. Palette mirrors the page charcoal neutrals. The switch knob is `moon.svg`; "on" lights the track white with a glow. There's no separate status line — the label text doubles as it: off reads "Dark mode is off", on picks at random from the language's `on` list (re-rolled on every render, so it changes when the popup is reopened too). (`--accent` is defined but currently unused.) The header's right end stacks two asides: a language dropdown and a bug-report link (Material Symbols "bug_report", inlined with `fill: currentColor`) opening the repo's GitHub new-issue form; `popup.js` rewrites the link's `href` to prefill a body with the manifest version and user agent, and the static `href` in the HTML is the fallback if that doesn't run. Translation is attribute-driven: `data-i18n="<key>"` fills an element's text, `data-i18n-title="<key>"` sets its `title` **and** `aria-label` — the icon-only controls have no text node, so the tooltip is the only thing naming them. The language control is a native `<select>` stripped of its own chrome: its option list is drawn by the OS, so it can extend past the 300px popup edge that would clip a custom dropdown, and it gets keyboard support for free. It shows the current language's own name, so no separate icon is needed to say what it is. The caret is painted **over** the select with `pointer-events: none` — as a sibling it'd be a dead zone that looks like part of the control. |
+| `strings.js`                            | Popup UI text per language, plus `LANGS` (also the order of the dropdown, and `LANGS[0]` is the fallback) and `LANG_NAMES` (each language's name in its own script — never translated, so a reader can find their language while the UI is in another one). Adding a language = a code in `LANGS`, a name in `LANG_NAMES`, a block in `STRINGS`; the dropdown builds itself from those. Loaded as a plain classic script before `popup.js`, so these are globals — the popup paints already translated with no async step. |
+| `_locales/en|ja/messages.json`          | Manifest text only: `extDescription` and `extTitle`, reached from `manifest.json` as `__MSG_extDescription__` / `__MSG_extTitle__`, with `default_locale: "en"`. Adding a UI string means editing `strings.js`; adding a manifest string means editing every locale file here. |
 | `icons/`                                | `moon.svg` — the source of the whole icon: a moon-yellow disc (`#fce183` body, `#e8bc48` craters) with an `M` stroked in `#b6861e`. Used directly as the popup switch knob, and the PNGs are rendered from it. `icon{16,32,48,128}.png`: render `moon.svg` in headless Chrome at 128px with `--force-device-scale-factor=4 --default-background-color=00000000` (transparent corners), then downscale that master with `sips -z`. Point Chrome at a small HTML wrapper that sets the `<img>` to `128px`, not at the SVG directly — the SVG's intrinsic size is 600px, so loading it as the top-level document renders a cropped corner. **The same SVG is inlined as `MOON_SVG` in `content.js` — change both together.** |
 
 ## content.js tour
@@ -172,7 +179,7 @@ Toggle-on splash
 - `applyAtCover()` — holds `applyDark` until `SPLASH_COVER` (72% of the run), so
   the light-to-dark swap happens hidden behind the moon, like a scene wipe.
 - **Only the top frame draws the moon, but every frame must wait for cover.**
-  `all_frames` gives each Garoon iframe its own copy of this script; if a subframe
+  `all_frames` gives each iframe its own copy of this script; if a subframe
   applied the theme immediately it would visibly flip dark while the moon was
   still small. So the frame role only decides `playSplash()` vs `applyAtCover()` —
   both delay by the same amount, and the whole page flips at one instant.
@@ -204,7 +211,7 @@ Toggle-on splash
    light). Each `<link>`/`<style>` is guarded with `PROCESSED` and transformed once.
 
 3a. **Never write to a page `<style>`'s `textContent`. Not even the same value.**
-CSS-in-JS (styled-components, Emotion — e.g. Kintone's `sc-*`/hashed classes)
+CSS-in-JS (styled-components, Emotion — e.g. the `sc-*`/hashed classes under `/k/`)
 injects rules via the CSSOM (`insertRule`) and keeps `textContent` empty.
 Assigning `textContent`, _even the same empty string_, makes the browser re-parse
 the element and WIPE the injected rules, destroying layout. This is why
@@ -214,7 +221,7 @@ indices stay valid. Writing to our own overlay is fine — it holds plain text.
 
 3b. **Preserve the `<link media="...">` scope when reinjecting.** A reinjected
 `<style>` defaults to `media="all"`, so a `media="print"` sheet would suddenly
-apply on screen. Garoon's `print.css` has `.cloudHeader-grn{position:static
+apply on screen. The `/g/` print stylesheet has `.cloudHeader-grn{position:static
    !important}` — leaking it on screen overrode the header's runtime `position:fixed`
 and broke the layout. `processLink` copies `link.media` onto the `<style>`. (Cascade
 ORDER is already preserved by inserting each replacement right after its own link,
@@ -225,7 +232,7 @@ so order-dependent rules resolve the same — media was the gap.)
    losing it when the transform ran over raw text: a global color replace corrupted
    id selectors that look like hex (`#abc`, `#dad`), and word-boundary keyword
    matching hit the `gray` inside `var(--component-color-border-gray)`, making the
-   border invalid and reflowing Kintone's header. If you ever add matching that
+   border invalid and reflowing the `/k/` header. If you ever add matching that
    isn't scoped to one property value, you are reintroducing both.
 
 5. **In `remapTokens`, protect `url(...)` and quoted strings.** Data-URI SVGs embed
@@ -239,12 +246,12 @@ so order-dependent rules resolve the same — media was the gap.)
    collide with stylesheet content; do NOT use NUL bytes (they make the file read
    as binary to `git`/`grep`).
 
-6. **Already-dark elements get flipped the wrong way.** Garoon styles some elements
+6. **Already-dark elements get flipped the wrong way.** The site styles some elements
    dark in its _light_ theme (e.g. `.cloudHeader-grn` = `#4b4a4a` with light text).
    Lightness inversion turns those _light_ — wrong. These can't be auto-detected
    from a color alone (dark text _should_ invert to light; a dark background should
    not), so they're handled by hand in the `OVERRIDES` block. Use **doubled-class
-   selectors** (`.x.x`) there to win specificity against Garoon's own `!important`.
+   selectors** (`.x.x`) there to win specificity against the site's own `!important`.
 
 7. **Native form controls & scrollbars have no CSS color** — the browser draws them
    from UA defaults the remapper never sees. `OVERRIDES` forces inputs/textarea/select
@@ -297,6 +304,21 @@ gotcha 13.)
     light. That's a tuning decision, not a parse failure — if translucent white
     panels should darken, that heuristic is the knob.
 
+16. **The popup can't use `chrome.i18n.getMessage()`.** That API resolves to the
+    browser UI language and has no runtime override, so the popup's language
+    button could never beat it. Popup text therefore comes from `STRINGS` in
+    `strings.js`; `_locales/` holds the manifest strings only. The manifest ones
+    genuinely cannot be overridden — Chrome resolves them before any extension
+    code runs — so the extension description and toolbar tooltip always follow
+    the browser, even when the popup is showing the other language. That's
+    accepted, not a bug to chase.
+
+17. **A stored language must be validated before use.** `chrome.storage.sync`
+    syncs across profiles and can hand back a code from a build that had more
+    languages than this one. `render()` indexes `STRINGS[lang]` directly, so an
+    unknown code would throw and leave the popup blank; the load path checks
+    `STRINGS[stored]` exists and falls back to the browser language.
+
 ## How to test (the reliable harness)
 
 There is no automated test suite; verification is manual via headless Chrome.
@@ -316,12 +338,12 @@ let src = fs
 Then assert: `#fff` → charcoal, brand colors preserved, `#abc{}` selector intact,
 `url()`/strings untouched.
 
-Render-test against a **real saved page over HTTP** (Garoon or Kintone):
+Render-test against a **real saved page over HTTP**:
 
 1. Save a logged-in page ("Save Page As → Web Page, Complete"). **Then COPY the
    capture to a throwaway dir and test there — never generate test files inside the
    original capture folder.** (A cleanup glob there once deleted the original
-   `garoon.html`; `rm` does not go to Trash.) The captures are the developer's own
+   the original capture; `rm` does not go to Trash.) The captures are the developer's own
    and are **not** committed to the repo.
 2. `cd <copy> && python3 -m http.server 8731`
 3. Build a test HTML: strip the page's own `<script>`s (they hang headless), inject

@@ -1,0 +1,10 @@
+{
+  "extDescription": {
+    "message": "cybozu.com をダークモードにします。",
+    "description": "Extension description, shown in chrome://extensions and the Web Store."
+  },
+  "extTitle": {
+    "message": "Moonaroon — cybozu.com のダークモード",
+    "description": "Toolbar button tooltip."
+  }
+}

@@ -41,14 +41,14 @@ Parsing rather than pattern-matching is what lets it reach nested CSS, modern co
 
 Two cases work differently:
 
-- **`<style>` elements** are same-origin, so their live CSSOM is read directly with no fetch. Their `textContent` is never written to — doing that makes the browser re-parse the element and wipe rules a CSS-in-JS library added through `insertRule`, which is what makes Kintone's styled-components colors reachable at all.
+- **`<style>` elements** are same-origin, so their live CSSOM is read directly with no fetch. Their `textContent` is never written to — doing that makes the browser re-parse the element and wipe rules a CSS-in-JS library added through `insertRule`, which is what makes styled-components colors reachable at all.
 - **Inline `style=""` attributes** are rewritten in place, since nothing outranks them short of `!important`. The original values are stashed so they can be restored.
 
 Which properties get read is `DIRECT_COLOR` (single-color values) and `COMPOSITE_COLOR` (values with colors inside them, like gradients); add to those to reach more. No color-keyword list is needed — named colors are resolved by the parser already.
 
 ### Keeping up with the page
 
-The content script runs at `document_start` in **all frames** (Garoon uses iframes heavily). After that:
+The content script runs at `document_start` in **all frames** (some cybozu.com apps use iframes heavily). After that:
 
 - A `MutationObserver` picks up stylesheets, `<style>` elements and inline styles added later.
 - A re-scan runs on `DOMContentLoaded`, on `load`, and on a few short timers, for sheets that aren't parsed yet on the first pass.
@@ -62,7 +62,7 @@ State lives in `chrome.storage.sync`, so it persists across reloads and tabs.
 
 Some things no color remap can get right, so `OVERRIDES` in `content.js` handles them by hand:
 
-- **Elements the site already styles dark in its light theme** — Garoon's cloud header is `#4b4a4a` with light text, and inverting lightness would wrongly turn it light. A color alone can't tell "dark background" from "dark text", so these are listed explicitly.
+- **Elements the site already styles dark in its light theme** — the cloud header bar is `#4b4a4a` with light text, and inverting lightness would wrongly turn it light. A color alone can't tell "dark background" from "dark text", so these are listed explicitly.
 - **Native form controls**, which take their text color from the browser default and so are invisible to the remap.
 - **Scrollbars**, via `color-scheme: dark` plus `::-webkit-scrollbar` rules. `color-scheme: dark` is also what makes the browser pick the dark branch of any `light-dark()`.
 
@@ -74,5 +74,7 @@ If one specific element still looks wrong, this is where to fix it. Use doubled-
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `manifest.json`                         | Manifest V3 config. `all_frames`, plus `host_permissions` for `https://*.cybozu.com/*` — one pattern covering every tenant subdomain and the `static.cybozu.com` CDN the fetches read |
 | `content.js`                            | All theming logic (see above)                                                                                                                                                         |
-| `popup.html` / `popup.css` / `popup.js` | Toolbar popup with the toggle                                                                                                                                                         |
+| `popup.html` / `popup.css` / `popup.js` | Toolbar popup with the toggle and the language button                                                                                                                                 |
+| `strings.js`                            | Popup UI text in English and Japanese                                                                                                                                                 |
+| `_locales/`                             | Manifest text (extension description, toolbar tooltip) in English and Japanese                                                                                                        |
 | `icons/`                                | Moon icons (16/32/48/128) + `moon.svg` for the popup switch                                                                                                                           |

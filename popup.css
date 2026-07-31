@@ -3,8 +3,12 @@
   --surface: #202527; /* elevated row */
   --fg: #f1f3f4; /* primary text */
   --muted: #929fa5; /* secondary text */
-  --accent: #3599ff; /* Garoon primary blue as remapRgb vivifies it; unused */
+  --accent: #3599ff; /* the site's primary blue as remapRgb vivifies it; unused */
   --track: #3e474c; /* switch track / borders */
+
+  /* The language dropdown's option list is drawn by the OS, outside this page's
+     styling. This is what makes that menu dark to match. */
+  color-scheme: dark;
 }
 
 * {
@@ -17,6 +21,11 @@ body {
   padding: 16px;
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* Explicit and unitless, inherited by everything. `normal` sizes a line box from
+     the font's own ascent/descent, and the Japanese fallback font's are taller than
+     the Latin one's — so the header and the toggle row grew by a few px on switching
+     language. Deriving the box from font-size instead makes it script-independent. */
+  line-height: 1.3;
   background: var(--bg);
   color: var(--fg);
 }
@@ -29,8 +38,10 @@ body {
 }
 
 .moon {
-  width: 28px;
-  height: 28px;
+  /* Sized to just fit the two-line title block beside it, so a bigger moon doesn't
+     make the header taller. */
+  width: 34px;
+  height: 34px;
   display: block;
   border-radius: 50%;
 }
@@ -112,19 +123,97 @@ body {
   transform: translateX(27px);
 }
 
-/* Sits at the right end of the header row. Dimmer than --muted so it reads as an
-   aside next to the title; hover/focus lifts it to --muted so it's still clearly
-   a link when looked for. */
-.report {
+/* Secondary controls, stacked at the right end of the header row and right-aligned
+   so their ragged edge sits against the popup edge. Both are dimmer than --muted so
+   they read as asides next to the title; hover/focus lifts them to --muted so
+   they're still clearly interactive when looked for. nowrap because the Japanese
+   strings are wider and would otherwise break across two lines. */
+.aside {
   margin-left: auto;
   align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+}
+
+.lang,
+.report {
   font-size: 11px;
   color: #565f64;
   text-decoration: none;
+  white-space: nowrap;
 }
 
+/* A native <select>, stripped back to look like the text link beside it. Native
+   matters more than it looks: the popup is a 300px window and the option list is
+   drawn by the OS, so it can extend past the popup edge. A custom dropdown would
+   be clipped by that edge, and would need its own keyboard handling. */
+/* The select is the whole hit area. The caret is painted over it and made
+   click-through, so pressing the caret opens the menu — as a sibling beside the
+   select it'd be a dead zone that looks like part of the control. The select
+   reserves room for it with padding, so it never overlaps the text. */
+.lang {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.lang-select {
+  appearance: none;
+  margin: 0;
+  border: 0;
+  padding: 0 12px 0 0; /* clears the caret */
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: inherit;
+  /* Auto-sizes to the widest option, so switching language doesn't shift the
+     header. Capped in case a long language name is added later. */
+  max-width: 110px;
+  /* The box is as wide as the LONGEST language name, so a shorter one would
+     otherwise sit adrift of the caret. Right-aligning keeps the two together and
+     the whole aside flush with the link below it. */
+  text-align: right;
+}
+
+/* The option list is an OS menu, not part of this page — :root's color-scheme is
+   what makes it dark. These two only matter where it is drawn in-page. */
+.lang-select option {
+  background: var(--surface);
+  color: var(--fg);
+}
+
+.lang-caret {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  width: 8px;
+  height: 8px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+/* Icon only — the label lives in its title/aria-label. Most people never file a
+   bug, so it earns an icon's worth of space, not a line of text. */
+.report {
+  display: inline-flex;
+}
+
+.bug-icon {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
+.lang:hover,
+.lang:focus-within,
 .report:hover,
 .report:focus-visible {
   color: var(--muted);
-  text-decoration: underline;
 }
