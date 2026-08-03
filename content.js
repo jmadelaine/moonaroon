@@ -1,7 +1,13 @@
-// Moonaroon — dark mode for any *.cybozu.com host
+// Moonaroon — dark mode for any site on the user's list.
 //
-// Colors are remapped in HSL: neutrals invert their lightness onto a charcoal
-// hue, pale tints become dark surfaces, and accents go vivid (see remapRgb).
+// This script is injected into every http(s) page, in every frame. It themes the
+// page only where the master switch is on and the host is listed (see
+// hostListed), and does nothing at all otherwise.
+//
+// Colors are remapped in HSL, branching on the color AND on the role the property
+// paints in — background, text, or line. The same gray must stay dark as a
+// background and turn light as text, and the color alone cannot say which it is
+// (see PROP_ROLE and remapRgb).
 //
 // For every stylesheet we:
 //
@@ -26,25 +32,19 @@
 
 const STYLE_ID = "moonaroon-base-style";
 const STORAGE_KEY = "moonaroonEnabled";
+const SITES_KEY = "moonaroonSites"; // hosts the user has opted in, see hostListed
 const PROCESSED = "data-moonaroon"; // marks links/styles/elements we've handled
 const GEN = "data-moonaroon-gen"; // marks <style> nodes we injected
 
-// Site-specific fixes for elements the site already styles dark in light mode —
-// lightness-inversion wrongly flips these *light*, so we restore them by hand.
-// The cloud header bar is dark (#4b4a4a) with light text by default.
-const HEADER_BG = "#2d3338"; // charcoal — darker than the inverted result, not black
-// Doubled class selectors (.x.x) raise specificity so these beat the remapped
-// rules (some of which are !important) regardless of injection order.
+// Fixes for things the remap can't reach, because no stylesheet declares them:
+// the browser draws them from its own defaults. Everything here has to hold on
+// any site, so it's limited to native UI — no site's markup is named.
+//
+// A rule that targets one site's element belongs in a per-site overrides list,
+// not here. Doubled class selectors (.x.x) are the trick to use there: equal
+// specificity beats the remapped rules (some of which are !important) regardless
+// of injection order.
 const OVERRIDES = `
-  .cloudHeader-grn.cloudHeader-grn { background:${HEADER_BG} !important; }
-  .header_portal_title_grn.header_portal_title_grn,
-  .cloudHeader-spaceApplicationTitle-grn.cloudHeader-spaceApplicationTitle-grn,
-  .header_appmenu_title_grn.header_appmenu_title_grn,
-  .cloudHeader-userName-grn.cloudHeader-userName-grn,
-  .cloudHeader-startMenuTitle-grn.cloudHeader-startMenuTitle-grn,
-  .cloudHeader-adminSettingsTitle-grn.cloudHeader-adminSettingsTitle-grn,
-  .cloudHeader-grnNotificationTitle-grn.cloudHeader-grnNotificationTitle-grn { color:#fafafa !important; }
-
   /* Native form controls take their text color from the browser default
      (black), which our remap never sees — so force a dark field with
      readable light-gray text. Excludes non-text controls and buttons. */
@@ -127,12 +127,37 @@ const NEUTRAL_SAT = 0.1;
 // The single source of truth for what a neutral of lightness `l` becomes, so the
 // canvas color and the neutral branch of remapRgb can never drift apart.
 // white -> ~0.10, black -> ~0.95, 0.5 -> ~0.525
+const NEUTRAL_L_BASE = 0.95;
+const NEUTRAL_L_SPAN = 0.85;
 function neutralFor(l) {
-  return hslToRgb(NEUTRAL_HUE, NEUTRAL_SAT, 0.95 - l * 0.85);
+  return hslToRgb(NEUTRAL_HUE, NEUTRAL_SAT, NEUTRAL_L_BASE - l * NEUTRAL_L_SPAN);
 }
 
-// Relative luminance, WCAG 2.1. Used to hold accent colors to a contrast floor
-// against the dark canvas instead of trusting HSL lightness, which is not
+// A neutral used as a BACKGROUND always ends up dark — inverting is only right
+// for a neutral that was light to begin with. A site that paints an element dark
+// in its light theme (a header bar at #4b4a4a, a footer, a code block) means it
+// to be dark, and inverting turns it into a glaring light slab.
+//
+// Above SURFACE_PEAK this is just neutralFor: light-theme surfaces cluster in the
+// top fifth of the range (#fff, #f7f7f7, #eee sit within 0.07 of each other), and
+// inverting expands that into a usable spread instead of crushing it. Below the
+// peak the curve rises from the canvas floor instead, so darker input stays
+// darker and everything lands in the same charcoal family. The two meet exactly
+// at the peak, so there's no step in the middle of the range.
+const SURFACE_PEAK = 0.75;
+function neutralSurfaceFor(l) {
+  if (l >= SURFACE_PEAK) return neutralFor(l);
+  const floor = NEUTRAL_L_BASE - NEUTRAL_L_SPAN; // = the canvas
+  const peak = NEUTRAL_L_BASE - SURFACE_PEAK * NEUTRAL_L_SPAN;
+  return hslToRgb(
+    NEUTRAL_HUE,
+    NEUTRAL_SAT,
+    floor + (l / SURFACE_PEAK) * (peak - floor),
+  );
+}
+
+// Relative luminance, WCAG 2.1. Holds accent colors to a contrast floor against
+// the dark canvas rather than trusting HSL lightness, which is not
 // perceptual — yellow at l=0.65 is glaring where blue at l=0.65 is still dim.
 function relLuminance(r, g, b) {
   const lin = (v) => {
@@ -153,7 +178,7 @@ function canvasLuminance() {
 }
 
 // Accent handling. On a dark canvas an unmodified mid-tone brand color reads
-// dull — Cybozu's #0e74dd sits at only 3.8:1 against the charcoal, and a navy
+// dull — a blue like #0e74dd sits at only 3.8:1 against the charcoal, and a navy
 // like #1c3f6e at 1.65:1 is effectively invisible.
 //
 // Hue is preserved. Saturation is taken to (or near) full, lightness is lifted
@@ -172,63 +197,149 @@ function canvasLuminance() {
 // as legibility demands. Past l≈0.72 an HSL color is mixing in white, so leading
 // with lightness makes greens and olives read *milky* rather than brighter.
 //
-// Note this only lifts a color against the *canvas*. Where a saturated color is
-// a button background, the label on top is usually white — a neutral, so it maps
-// to near-black charcoal and stays readable as dark-on-bright. Pale tints are
-// handled by the branch above and are never vivified: those are surfaces, and a
-// vivid surface would swamp its own content.
-const VIVID_SAT_FLOOR = 0.7; // even a muted accent ends up this saturated
-const VIVID_SAT_GAIN = 1.35; // then everything gets pushed further up
-const VIVID_SAT_CAP = 1.0; // full saturation is wanted here, not avoided
-const VIVID_L_MIN = 0.54; // darkest an accent may end up
-const VIVID_L_MAX = 0.68; // lightest, before the contrast climb
+// Note this only lifts a color against the *canvas*. A vivified color used as a
+// background is far brighter than the one the site authored, so whatever text
+// sits on it is not guaranteed to read — that's what inkFor handles. Pale
+// tints are excluded by the branch above and are never vivified: those are
+// surfaces, and a vivid surface would swamp its own content.
+// Accent text is tuned harder than an accent fill. A fill is a large block, so
+// its color carries on area alone; text is thin strokes and has to carry on the
+// color itself, so it gets the more aggressive set below.
 const MIN_CONTRAST = 4.0; // legibility floor that drives the per-hue lift
-const VIVID_L_CEILING = 0.9; // never bleach an accent to near-white
+const INK_MIN_CONTRAST = 5.5; // text is thin strokes, so it's held higher
 
-function vividFor(h, s, l) {
-  const sat = Math.min(
-    VIVID_SAT_CAP,
-    Math.max(s, VIVID_SAT_FLOOR) * VIVID_SAT_GAIN,
-  );
-  let light = VIVID_L_MIN + l * (VIVID_L_MAX - VIVID_L_MIN);
+// Fills, borders, and everything that isn't text.
+const VIVID_FILL = {
+  satFloor: 0.7, // even a muted accent ends up this saturated
+  satGain: 1.35, // then everything gets pushed further up
+  satCap: 1.0, // full saturation is wanted here, not avoided
+  lMin: 0.54, // darkest an accent may end up
+  lMax: 0.68, // lightest, before the contrast climb
+  lCeiling: 0.9, // never bleach an accent to near-white
+  minContrast: MIN_CONTRAST,
+};
+
+// Text. Brighter, and ONLY brighter — the saturation curve is deliberately
+// identical to the fill one.
+//
+// Saturation has no useful headroom here: the fill floor and gain already put
+// every accent at ~0.945 of a possible 1.0, so raising them buys about 5% and
+// costs real contrast, because in sRGB the only way to add chroma above l=0.5 is
+// to take lightness away — measured, a more saturated ink tuning costs brand blue
+// 6.0:1 -> 5.2:1 and orange 9.9:1 -> 9.3:1 for a difference too small to see. The
+// band carries the change instead, and the higher contrast floor lifts whichever
+// hues fall short of it.
+//
+// lMax stops at 0.74 on purpose. Past l≈0.72 an HSL color is mixing in white, so
+// greens and olives start reading milky rather than brighter — a couple of steps
+// past the line is worth it for the luminance, much more is not.
+const VIVID_INK = {
+  satFloor: 0.7, // same as the fill: saturation is already effectively maxed
+  satGain: 1.35,
+  satCap: 1.0,
+  lMin: 0.6, // the whole band sits above the fill's 0.54-0.68
+  lMax: 0.74,
+  lCeiling: 0.92,
+  minContrast: INK_MIN_CONTRAST,
+};
+
+function vividFor(h, s, l, t) {
+  const sat = Math.min(t.satCap, Math.max(s, t.satFloor) * t.satGain);
+  let light = t.lMin + l * (t.lMax - t.lMin);
   let rgb = hslToRgb(h, sat, light);
   // Raising lightness raises luminance monotonically for a fixed hue and
   // saturation, so climbing in small steps converges on the floor.
   while (
-    light < VIVID_L_CEILING &&
-    contrastRatio(relLuminance(...rgb), canvasLuminance()) < MIN_CONTRAST
+    light < t.lCeiling &&
+    contrastRatio(relLuminance(...rgb), canvasLuminance()) < t.minContrast
   ) {
-    light = Math.min(VIVID_L_CEILING, light + 0.02);
+    light = Math.min(t.lCeiling, light + 0.02);
     rgb = hslToRgb(h, sat, light);
   }
   return rgb;
 }
 
 // Map one light-theme color to its dark equivalent. Every branch returns a
-// color; the null return is kept because remapParsed still treats null as
-// "leave the authored text alone".
+// color, or null. remapParsed reads null as "leave the authored text alone".
+//
+// The role says what the color is painted as. The same gray needs opposite
+// treatment depending on it, and nothing about the three numbers can tell the
+// difference — the property name can, so remapValue passes it down.
+//
+//   SURFACE  a background. A dark one must stay dark; inverting it produces a
+//            glaring light slab in the middle of a dark page.
+//   INK      text, or an SVG fill. A light one must stay light: light text only
+//            ever exists on top of something dark, so it is already correct.
+//   LINE     borders and outlines, where plain inversion is right. A white
+//            border is often a spacer on a white card, so it can't share INK's
+//            rule without turning invisible separators into bright lines.
+const ROLE_LINE = 0;
+const ROLE_SURFACE = 1;
+const ROLE_INK = 2;
+
 const remapCache = new Map();
 
-function remapRgb(r, g, b) {
-  const key = (r << 16) | (g << 8) | b;
+function remapRgb(r, g, b, role) {
+  const key = (role << 24) | (r << 16) | (g << 8) | b;
   const hit = remapCache.get(key);
   if (hit !== undefined) return hit;
   const [h, s, l] = rgbToHsl(r, g, b);
   let out;
-  if (s < 0.12) {
-    out = neutralFor(l); // neutral gray -> charcoal
+  // Light ink is already right. Nobody writes near-white text on a light
+  // background — it would be invisible — so it was sitting on something dark
+  // and still is. This is what covers text whose background is set by a
+  // different rule, or by an image the remap can't read at all.
+  if (role === ROLE_INK && l > 0.8) {
+    out = null; // leave the authored value
+  } else if (s < 0.12) {
+    out = role === ROLE_SURFACE ? neutralSurfaceFor(l) : neutralFor(l);
   } else if (l > 0.8) {
     // Pale colored tint (e.g. light-blue selection bg) -> dark tinted surface.
     // These are surfaces, not accents, so they must NOT be vivified.
     out = hslToRgb(h, Math.min(s, 0.5), 0.16 + (1 - l) * 0.6);
   } else {
-    out = vividFor(h, s, l); // brand / accent / category color -> vivid
+    // brand / accent / category color -> vivid, harder for text than for a fill
+    out = vividFor(h, s, l, role === ROLE_INK ? VIVID_INK : VIVID_FILL);
   }
   remapCache.set(key, out);
   return out;
 }
 
 const toHex = (n) => n.toString(16).padStart(2, "0");
+const hexOf = ([r, g, b]) => `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+
+// The two ends of the neutral ramp, reused as the text colors for a background
+// whose own text can't be trusted to still read. Taking them from neutralFor
+// rather than picking literal white and black keeps them in the theme's charcoal
+// family, and INK_DARK is exactly the canvas.
+const INK_LIGHT = neutralFor(0);
+const INK_DARK = neutralFor(1);
+
+// Whichever end reads better on this background. Bright vivified fills need dark
+// text; dark surfaces need light text.
+function inkFor(bg) {
+  const lum = relLuminance(...bg);
+  return contrastRatio(lum, relLuminance(...INK_LIGHT)) >=
+    contrastRatio(lum, relLuminance(...INK_DARK))
+    ? INK_LIGHT
+    : INK_DARK;
+}
+
+// Does a background of this ORIGINAL color force us to restate the text color?
+// Only where the remap moves the background somewhere its text can't follow:
+//
+//   neutral and already dark  the background stays dark, but the light text the
+//                             site put on it inverts to near-black
+//   non-neutral, not pale     vividFor makes it much brighter than authored
+//
+// A light neutral (the overwhelming majority) is left alone: it inverts to dark
+// and its dark text inverts to light, which is already correct. Restating text
+// there would overwrite inherited colors for no gain.
+function needsInk(r, g, b, a) {
+  if (a !== null && a < 0.95) return false; // see-through: not what sets the text
+  const [, s, l] = rgbToHsl(r, g, b);
+  return s < 0.12 ? l < 0.5 : l <= 0.8;
+}
 
 function parseHex(h) {
   h = h.slice(1);
@@ -323,13 +434,13 @@ function parseColor(value) {
 }
 
 // Remap a parsed color and serialize it. null = leave the original text alone.
-function remapParsed(c) {
+function remapParsed(c, role) {
   const [r, g, b, a] = c;
   if (isProtectedTranslucent(r, g, b, a)) return null;
-  const out = remapRgb(r, g, b);
+  const out = remapRgb(r, g, b, role);
   if (!out) return null;
   return a >= 0.999
-    ? `#${toHex(out[0])}${toHex(out[1])}${toHex(out[2])}`
+    ? hexOf(out)
     : `rgba(${out[0]}, ${out[1]}, ${out[2]}, ${Math.round(a * 1000) / 1000})`;
 }
 
@@ -401,7 +512,7 @@ const CAND_RE = new RegExp(
 
 // Rewrite color tokens inside a composite value (gradients, custom properties).
 // Returns null when nothing changed.
-function remapTokens(value, baseHref) {
+function remapTokens(value, baseHref, role) {
   const stash = [];
   const hold = (s) => {
     stash.push(s);
@@ -421,7 +532,7 @@ function remapTokens(value, baseHref) {
   out = out.replace(CAND_RE, (tok) => {
     const parsed = parseColor(tok);
     if (!parsed) return tok;
-    const next = remapParsed(parsed);
+    const next = remapParsed(parsed, role);
     if (next === null) return tok;
     changed = true;
     return next;
@@ -432,33 +543,99 @@ function remapTokens(value, baseHref) {
   return changed ? out : null;
 }
 
+// Which role each property paints in. Anything unlisted is ROLE_LINE, the plain
+// lightness inversion.
+//
+// Custom properties are deliberately absent: a --token has no role until it is
+// used, and one token may back both a fill and a label. LINE is the safe default
+// for them — a token holding a light color inverts to dark, which is right for a
+// surface and for text alike.
+const PROP_ROLE = new Map([
+  ["background-color", ROLE_SURFACE],
+  ["background-image", ROLE_SURFACE],
+  ["color", ROLE_INK],
+  ["-webkit-text-fill-color", ROLE_INK],
+  ["fill", ROLE_INK],
+  ["stroke", ROLE_INK],
+]);
+
 // Remap one declaration's value. Returns null when it should stay as authored.
 function remapValue(prop, value, baseHref) {
   if (!value || SKIP_VALUE.test(value)) return null;
   const custom = prop.startsWith("--");
+  const role = PROP_ROLE.get(prop) ?? ROLE_LINE;
   if (DIRECT_COLOR.has(prop) || custom) {
     const parsed = parseColor(value.trim());
     // A custom property holding a bare color is the highest-value case there
     // is: remapping the token at its definition themes every use of it at once.
-    if (parsed) return remapParsed(parsed);
+    if (parsed) return remapParsed(parsed, role);
   }
   if (COMPOSITE_COLOR.has(prop) || custom)
-    return remapTokens(value, baseHref);
+    return remapTokens(value, baseHref, role);
   return null;
+}
+
+// The text color to force on a declaration block, or null to leave text alone.
+// A background and the text on it have to be decided together: keeping a dark
+// bar dark while its white label inverts to black is worse than the light bar we
+// started with.
+//
+// Returns the remapped background too, so a caller can test whether a text color
+// the site actually declared still reads against it.
+function inkForBlock(style) {
+  const bgValue = style.getPropertyValue("background-color");
+  if (!bgValue || SKIP_VALUE.test(bgValue)) return null;
+  const parsed = parseColor(bgValue.trim());
+  if (!parsed || !needsInk(...parsed)) return null;
+  const bg = remapRgb(parsed[0], parsed[1], parsed[2], ROLE_SURFACE);
+  return { ink: inkFor(bg), bg };
+}
+
+// Keep a text color the site declared if it's an accent that still reads on the
+// new background — flattening every label to plain ink would lose colored text
+// on colored panels. A neutral is always replaced: it was chosen to read against
+// the site's light background, which is not what sits behind it here.
+function inkOverride(value, block) {
+  if (!value || SKIP_VALUE.test(value)) return hexOf(block.ink);
+  const parsed = parseColor(value.trim());
+  if (!parsed) return hexOf(block.ink);
+  const [r, g, b, a] = parsed;
+  const [, s] = rgbToHsl(r, g, b);
+  if (s < 0.12 || a < 0.95) return hexOf(block.ink);
+  // null means ROLE_INK left it as authored (a pale accent), so test that.
+  const out = remapRgb(r, g, b, ROLE_INK) || [r, g, b];
+  return contrastRatio(relLuminance(...out), relLuminance(...block.bg)) >=
+    INK_MIN_CONTRAST
+    ? hexOf(out)
+    : hexOf(block.ink);
 }
 
 // Serialize just the declarations of `style` whose colors changed.
 function changedDecls(style, baseHref) {
+  const block = inkForBlock(style);
   let out = "";
+  let restated = false;
   for (const prop of style) {
     const value = style.getPropertyValue(prop);
+    const priority = style.getPropertyPriority(prop);
+    if (prop === "color" && block) {
+      restated = true;
+      out += `color:${inkOverride(value, block)}${
+        priority ? " !" + priority : ""
+      };`;
+      continue;
+    }
     const next = remapValue(prop, value, baseHref);
     if (next === null) continue;
-    const priority = style.getPropertyPriority(prop);
     // Match the original's priority rather than fight it: equal specificity and
     // equal priority means later source order wins, and the overlay is later.
     out += `${prop}:${next}${priority ? " !" + priority : ""};`;
   }
+  // A rule that paints a background but names no text color still needs one:
+  // the text it inherits was picked against the light theme. This adds a
+  // declaration the site didn't have, which is why needsInk is narrow — it fires
+  // only where the inherited text would otherwise be unreadable.
+  if (block && !restated) out += `color:${hexOf(block.ink)};`;
   return out;
 }
 
@@ -700,6 +877,13 @@ function processInlineStyles(root) {
   for (const el of els) {
     if (el.getAttribute(PROCESSED) || el.getAttribute(GEN)) continue;
     let changed = false;
+    // Same background/text pairing as a stylesheet rule. An inline background is
+    // if anything more likely to be a hand-placed dark box than a rule is.
+    const block = inkForBlock(el.style);
+    const stash = (prop, val) => {
+      el.dataset.moonaroonOrig =
+        (el.dataset.moonaroonOrig || "") + `${prop}::${val}||`;
+    };
     // Longhands only — never a shorthand AND its longhand together. A shorthand
     // like `background:` or `border-color:` sets the longhands, so reading the
     // longhand catches the same color; processing both would remap it twice
@@ -716,13 +900,17 @@ function processInlineStyles(root) {
       "stroke",
     ]) {
       const val = el.style.getPropertyValue(prop);
-      if (!val) continue;
+      if (!val && !(prop === "color" && block)) continue;
       // Inline styles can't be overlaid — nothing outranks them short of
       // !important — so these are rewritten in place.
-      const next = remapValue(prop, val, document.baseURI);
+      const next =
+        prop === "color" && block
+          ? inkOverride(val, block)
+          : remapValue(prop, val, document.baseURI);
       if (next !== null && next !== val) {
-        el.dataset.moonaroonOrig =
-          (el.dataset.moonaroonOrig || "") + `${prop}::${val}||`;
+        // An empty stashed value restores as a removeProperty, which is what
+        // undoes a color we added to an element that had none.
+        stash(prop, val);
         el.style.setProperty(prop, next, el.style.getPropertyPriority(prop));
         changed = true;
       }
@@ -752,8 +940,7 @@ function applyDark() {
   base.setAttribute(GEN, "1"); // ours — never feed it back through the remapper
   // Canvas = the same charcoal that a white surface remaps to, so the page
   // background matches the themed surfaces instead of being a flat gray.
-  const [cr, cg, cb] = remapRgb(255, 255, 255);
-  const canvas = `#${toHex(cr)}${toHex(cg)}${toHex(cb)}`;
+  const canvas = hexOf(remapRgb(255, 255, 255, ROLE_SURFACE));
   base.textContent = `html { background:${canvas}; }` + OVERRIDES;
   (document.head || document.documentElement).appendChild(base);
 
@@ -908,8 +1095,8 @@ const MOON_SVG = `<svg viewBox="0 0 600 600" width="100%" height="100%" style="d
 // the media query reflects the OS.
 function splashWanted() {
   return (
-    // Storage changes broadcast to every open Cybozu tab, not just the one the
-    // popup was opened over. A hidden tab has nobody to entertain.
+    // Storage changes broadcast to every open tab, not just the one the popup
+    // was opened over. A hidden tab has nobody to entertain.
     document.visibilityState === "visible" &&
     !matchMedia("(prefers-reduced-motion: reduce)").matches &&
     typeof Element.prototype.animate === "function"
@@ -988,13 +1175,45 @@ function sync(enabled, animate) {
   else applyAtCover();
 }
 
-// Initial state — no splash, the page was already loading dark.
-chrome.storage.sync.get({ [STORAGE_KEY]: false }, (res) =>
-  sync(res[STORAGE_KEY], false),
-);
+// The theme applies where the master switch is on AND this host is on the user's
+// list. The script itself is injected everywhere — matching here rather than
+// through dynamically registered content scripts keeps the whole decision in one
+// readable place, and costs nothing on a host that isn't listed: this file does
+// no work at all until sync() is called with true.
+let enabledPref = false;
+let siteList = [];
+let applied = false;
 
-// React to toggles from the popup live
+// An entry covers the bare host and every subdomain, so `example.com` matches
+// `www.example.com` too — the same reach a `*.example.com` match pattern has,
+// which is what someone typing one host into a list expects it to mean.
+function hostListed() {
+  const host = location.hostname.toLowerCase();
+  return siteList.some((s) => host === s || host.endsWith("." + s));
+}
+
+// Act only on a real change of state. A storage write for some OTHER site's
+// entry reaches this tab too, and re-running sync() on it would replay the
+// splash and re-apply an already-applied theme on every unrelated edit.
+function refresh(animate) {
+  const want = enabledPref && hostListed();
+  if (want === applied) return;
+  applied = want;
+  sync(want, animate);
+}
+
+// Initial state — no splash, the page was already loading dark.
+chrome.storage.sync.get({ [STORAGE_KEY]: false, [SITES_KEY]: [] }, (res) => {
+  enabledPref = res[STORAGE_KEY];
+  siteList = res[SITES_KEY] || [];
+  refresh(false);
+});
+
+// React to the popup live: the master switch, and edits to the site list.
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "sync" && changes[STORAGE_KEY])
-    sync(changes[STORAGE_KEY].newValue, true);
+  if (area !== "sync") return;
+  if (!changes[STORAGE_KEY] && !changes[SITES_KEY]) return;
+  if (changes[STORAGE_KEY]) enabledPref = changes[STORAGE_KEY].newValue;
+  if (changes[SITES_KEY]) siteList = changes[SITES_KEY].newValue || [];
+  refresh(true);
 });

@@ -1,43 +1,88 @@
 # CLAUDE.md — Moonaroon
 
 Context for working on this extension with Claude Code. Read this before changing
-theming logic — several non-obvious decisions here were paid for with real bugs.
+theming logic — several of the decisions here are non-obvious and load-bearing.
 
 ## What this is
 
 **Moonaroon** is a Manifest V3 Chrome extension that applies a coherent dark mode
-to **any `*.cybozu.com` host**. A toolbar popup toggles it; state lives in
-`chrome.storage.sync`. The content script runs at `document_start` in **all
-frames**.
+to **any site the user has put on a list**. The content script runs at
+`document_start` in **all frames**, on every http(s) page — then gates itself on
+that list. A toolbar popup holds a master on/off switch, the list editor and a
+language picker. All state lives in `chrome.storage.sync`.
 
-Two apps under that domain stress very different things, and both are covered
-below. Referred to here by URL path, since that's what's actually observable:
+Two shapes of site stress very different parts of this, and both are worth
+keeping in mind when changing anything:
 
-- **`/g/`** — a classic multi-frame app: many `<link>` sheets, iframes,
-  `media="print"`, an already-dark header.
-- **`/k/`** — a React/styled-components app: CSS-in-JS, CSS custom properties
-  named after colors.
+- **Classic multi-frame apps** — many `<link>` sheets, iframes, `media="print"`,
+  and elements the site already paints dark in its light theme.
+- **React / styled-components apps** — CSS-in-JS injected through `insertRule`
+  with no `textContent`, and custom properties named after colors.
 
 ## The core idea (and what it is NOT)
 
 We do **not** use a blind `filter: invert()`.
 
-Colors are remapped in HSL, on three branches, with **hue always preserved** — so
-Cybozu blue stays blue, alert red stays red, and calendar category colors stay
-distinguishable from one another:
+Colors are remapped in HSL with **hue always preserved** — so a brand blue stays
+blue, alert red stays red, and a set of category colors stays distinguishable
+from one another.
 
-| input | branch | result |
-| --- | --- | --- |
-| neutral (`s < 0.12`) | `neutralFor` | lightness inverted onto a charcoal hue |
-| pale tint (`l > 0.8`) | inline | dark tinted **surface** |
-| everything else | `vividFor` | **brighter, more saturated accent** |
+The branch depends on the color **and on the role it's painted in**, which comes
+from the property name via `PROP_ROLE`. The same gray needs opposite treatment as
+a background and as text, and the three numbers alone cannot say which it is:
 
-Neutrals are tinted toward charcoal rather than flat gray. Accents are pushed up
-in saturation and lightness, then lifted further if they're still below
-`MIN_CONTRAST` against the canvas — a mid-tone brand color is dull on dark
-(`#0e74dd` starts at 3.8:1) and a dark one is nearly invisible (`#1c3f6e` at
+| input | `ROLE_SURFACE` (`background-color`, `background-image`) | `ROLE_INK` (`color`, `fill`, `stroke`) | `ROLE_LINE` (borders, outlines, `--tokens`) |
+| --- | --- | --- | --- |
+| light neutral | inverted onto charcoal | inverted onto charcoal | inverted onto charcoal |
+| **dark neutral** | **`neutralSurfaceFor` — stays dark** | inverted → light | inverted → light |
+| **pale (`l > 0.8`)** | dark tinted surface | **left as authored** | dark tinted surface |
+| everything else | `vividFor` + `VIVID_FILL` | `vividFor` + **`VIVID_INK`** (brighter) | `vividFor` + `VIVID_FILL` |
+
+Two of those cells are the whole point of having roles:
+
+- **A dark neutral background stays dark.** A site that paints a header bar
+  `#4b4a4a` in its *light* theme means it to be dark; inverting produces a
+  glaring light slab. `neutralSurfaceFor` maps it into the same charcoal family
+  as everything else instead.
+- **Light ink is left alone.** Nobody writes near-white text on a light
+  background — it would be invisible — so it was already sitting on something
+  dark. This is the only thing that reaches text whose background is set by a
+  *different rule*, or by an image no remap can read.
+
+`ROLE_LINE` is the plain inversion, and is the default for anything unlisted. A
+white border is often a spacer on a white card, so borders can't share the ink
+rule without turning invisible separators into bright lines.
+
+Accents are pushed up in saturation and lightness, then lifted further if they're
+still below `MIN_CONTRAST` against the canvas — a mid-tone brand color is dull on
+dark (`#0e74dd` starts at 3.8:1) and a dark one is nearly invisible (`#1c3f6e` at
 1.65:1). Pale tints are deliberately *not* vivified: they're surfaces, and a
 vivid surface swamps its own content.
+
+### Background and text are decided together
+
+A background and the text on it can't be remapped independently. Keeping a dark
+bar dark while its white label inverts to near-black is *worse* than the light bar
+we started with — so `changedDecls` decides both from the same declaration block:
+
+- `needsInk` asks whether the **original** background moves somewhere its text
+  can't follow. Only two cases qualify: an already-dark neutral (background stays
+  dark, but the light text on it would invert), and a non-pale non-neutral
+  (`vividFor` makes it far brighter than authored). A light neutral background —
+  the overwhelming majority — is left alone, since it inverts to dark and its
+  dark text inverts to light, which is already right.
+- `inkFor` then picks whichever end of the neutral ramp reads better on the
+  remapped background. Bright vivified fills get dark text; dark surfaces get
+  light text.
+- `inkOverride` keeps a text color the site declared if it's an *accent* that
+  still clears `MIN_CONTRAST` on the new background, so colored text on a colored
+  panel survives. A neutral is always replaced: it was chosen to read against the
+  site's light background, and that is not what sits behind it here.
+
+If the rule paints a qualifying background but names no text color, one is added,
+because the text it inherits was picked against the light theme. That's the only
+place the transform emits a declaration the site didn't have, which is why
+`needsInk` is kept narrow.
 
 ## How stylesheets are read
 
@@ -55,15 +100,15 @@ The original sheet is never disabled and never edited. Inline `style=""`
 attributes are the one exception — nothing outranks them short of `!important`,
 so those are rewritten in place.
 
-**Do not go back to regexing stylesheet text.** That was the original approach
-and it silently missed whatever the regexes didn't describe. Measured against the
-test fixture, it failed on **native nesting** (a rule's own declarations get
-skipped whenever it contains a nested block — `/\{([^{}]*)\}/g` only matches
+**Never pattern-match stylesheet structure with regexes.** A regex only sees
+what it was written to describe, and silently passes everything else through.
+Against the test fixture it misses **native nesting** (a rule's own declarations
+are skipped whenever it contains a nested block — `/\{([^{}]*)\}/g` matches only
 innermost braces), **modern color syntax** (`oklch()`, `lab()`, `color()`,
-space-separated `rgb()`/`hsl()`, 4- and 8-digit hex), **CSS-in-JS** (rules that
-live only in the CSSOM), and it **inverted `light-dark()` backwards**. It also
-needed a pile of guards against corrupting selectors and identifiers that the
-parser makes unnecessary. Regexes here only ever touch a single property VALUE.
+space-separated `rgb()`/`hsl()`, 4- and 8-digit hex) and **CSS-in-JS** (rules
+that live only in the CSSOM), and it **inverts `light-dark()` backwards**. It
+also needs a pile of guards against corrupting selectors and identifiers, none of
+which a parser requires. Regexes here only ever touch a single property VALUE.
 
 Why an overlay rather than replacing the sheet: serializing a whole parsed sheet
 round-trips it through the parser, so anything Chrome rejected (legacy hacks,
@@ -81,9 +126,9 @@ ought to win.
 
 | File                                    | Role                                                                                                                                                                                                                                                                             |
 | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `manifest.json`                         | MV3 config. `all_frames: true`. `host_permissions`/`matches` are the single pattern `https://*.cybozu.com/*` — a leading `*.` matches the bare host *and* every subdomain, so it covers each tenant plus the `static.cybozu.com` CDN that sheets are fetched from. Sibling domains (`cybozu.cn`, `cybozu-dev.com` and the like) are NOT covered; add them explicitly if needed.                                                                                                                                                                               |
+| `manifest.json`                         | MV3 config. `all_frames: true`. `host_permissions`/`matches` are `http://*/*` + `https://*/*`, deliberately NOT `<all_urls>`: that would add `file://`, where every resource is a unique opaque origin, so the cross-origin sheet reads this whole design rests on would fail (gotcha 1). The breadth is also what lets `fetch` reach sheets on whatever CDN a page uses. Which sites are actually themed is **not** decided here — the script is injected everywhere and `hostListed()` in `content.js` gates it against the user's list. Of the three `permissions`, only `storage` is used — `scripting` and `activeTab` are unused and can be dropped. |
 | `content.js`                            | All theming logic (see below).                                                                                                                                                                                                                                                   |
-| `popup.html` / `popup.css` / `popup.js` | Toolbar toggle. Palette mirrors the page charcoal neutrals. The switch knob is `moon.svg`; "on" lights the track white with a glow. There's no separate status line — the label text doubles as it: off reads "Dark mode is off", on picks at random from the language's `on` list (re-rolled on every render, so it changes when the popup is reopened too). (`--accent` is defined but currently unused.) The header's right end stacks two asides: a language dropdown and a bug-report link (Material Symbols "bug_report", inlined with `fill: currentColor`) opening the repo's GitHub new-issue form; `popup.js` rewrites the link's `href` to prefill a body with the manifest version and user agent, and the static `href` in the HTML is the fallback if that doesn't run. Translation is attribute-driven: `data-i18n="<key>"` fills an element's text, `data-i18n-title="<key>"` sets its `title` **and** `aria-label` — the icon-only controls have no text node, so the tooltip is the only thing naming them. The language control is a native `<select>` stripped of its own chrome: its option list is drawn by the OS, so it can extend past the 300px popup edge that would clip a custom dropdown, and it gets keyboard support for free. It shows the current language's own name, so no separate icon is needed to say what it is. The caret is painted **over** the select with `pointer-events: none` — as a sibling it'd be a dead zone that looks like part of the control. |
+| `popup.html` / `popup.css` / `popup.js` | Master switch, site list, language picker. Palette mirrors the page charcoal neutrals; `--accent` is `#0e74dd` as the theme vivifies it, used for focus rings. The switch knob is `moon.svg`; "on" lights the track white with a glow. There's no separate status line — the label text doubles as it: off reads "Dark mode is off", on picks at random from the language's `on` list (re-rolled on every render, so it changes when the popup is reopened too). The header's right end stacks two asides: a language dropdown and a bug-report link (Material Symbols "bug_report", inlined with `fill: currentColor`) opening the repo's GitHub new-issue form; `popup.js` rewrites the link's `href` to prefill a body with the manifest version and user agent, and the static `href` in the HTML is the fallback if that doesn't run. Translation is attribute-driven: `data-i18n="<key>"` fills an element's text, `data-i18n-title="<key>"` sets its `title` **and** `aria-label` — the icon-only controls have no text node, so the tooltip is the only thing naming them. The language control is a native `<select>` stripped of its own chrome: its option list is drawn by the OS, so it can extend past the 300px popup edge that would clip a custom dropdown, and it gets keyboard support for free. It shows the current language's own name, so no separate icon is needed to say what it is. The caret is painted **over** the select with `pointer-events: none` — as a sibling it'd be a dead zone that looks like part of the control. Below the toggle is the **site list**: rows above a text field and an Add button, each row an entry with a cross to remove it. It's a real `<form>` so Enter submits. `normalizeHost` takes whatever is pasted — full URL, `www.`, `*.`, trailing slash, mixed case — down to one bare lowercase host; `covered()` is the same subdomain test the content script uses, so the popup and the page agree on what "already listed" means. The field is **not** prefilled from the current tab: the popup is where you edit the list, not a prompt about the page behind it. |
 | `strings.js`                            | Popup UI text per language, plus `LANGS` (also the order of the dropdown, and `LANGS[0]` is the fallback) and `LANG_NAMES` (each language's name in its own script — never translated, so a reader can find their language while the UI is in another one). Adding a language = a code in `LANGS`, a name in `LANG_NAMES`, a block in `STRINGS`; the dropdown builds itself from those. Loaded as a plain classic script before `popup.js`, so these are globals — the popup paints already translated with no async step. |
 | `_locales/en|ja/messages.json`          | Manifest text only: `extDescription` and `extTitle`, reached from `manifest.json` as `__MSG_extDescription__` / `__MSG_extTitle__`, with `default_locale: "en"`. Adding a UI string means editing `strings.js`; adding a manifest string means editing every locale file here. |
 | `icons/`                                | `moon.svg` — the source of the whole icon: a moon-yellow disc (`#fce183` body, `#e8bc48` craters) with an `M` stroked in `#b6861e`. Used directly as the popup switch knob, and the PNGs are rendered from it. `icon{16,32,48,128}.png`: render `moon.svg` in headless Chrome at 128px with `--force-device-scale-factor=4 --default-background-color=00000000` (transparent corners), then downscale that master with `sips -z`. Point Chrome at a small HTML wrapper that sets the `<img>` to `128px`, not at the SVG directly — the SVG's intrinsic size is 600px, so loading it as the top-level document renders a cropped corner. **The same SVG is inlined as `MOON_SVG` in `content.js` — change both together.** |
@@ -93,24 +138,55 @@ ought to win.
 Color math & mapping
 
 - `rgbToHsl` / `hslToRgb` — conversions.
-- `remapRgb(r,g,b)` — **the heart of the theme.** Three branches (see the table
-  above), memoized on the packed rgb value. Tunables: `NEUTRAL_HUE`,
-  `NEUTRAL_SAT`, and the `VIVID_*` set.
+- `remapRgb(r,g,b,role)` — **the heart of the theme.** Branches on the color and
+  the role (see the table above), memoized on the packed rgb **plus the role** —
+  the same rgb has different answers in different roles, so the role must be in
+  the cache key. Returns `null` for "leave the authored value", which is how
+  light ink survives. Tunables: `NEUTRAL_HUE`, `NEUTRAL_SAT`, `SURFACE_PEAK`, and
+  the two `VIVID_*` tuning objects.
 - `neutralFor(l)` — the single source of truth for the neutral curve, so the
   canvas background and `remapRgb`'s neutral branch can't drift apart.
-- `vividFor(h,s,l)` — accent handling: saturation to (or near) full via floor +
-  gain, lightness into `[VIVID_L_MIN, VIVID_L_MAX]`, then a climb in 0.02 steps
-  until `MIN_CONTRAST` is met or `VIVID_L_CEILING` stops it. Hue is untouched.
-  The climb terminates because luminance rises monotonically with lightness at
-  fixed hue and saturation.
+- `neutralSurfaceFor(l)` — the same curve for neutral *backgrounds*, which must
+  always come out dark. Above `SURFACE_PEAK` (0.75) it *is* `neutralFor`:
+  light-theme surfaces cluster in the top fifth of the range (`#fff`, `#f7f7f7`,
+  `#eee` sit within 0.07 of each other) and inverting expands that into a usable
+  spread. Below the peak it rises from the canvas floor instead, so darker input
+  stays darker. **The two meet exactly at the peak** — derived from
+  `NEUTRAL_L_BASE`/`NEUTRAL_L_SPAN` rather than written as a literal, so there's
+  no step in the middle of the range if the curve is ever retuned.
+- `inkFor(bg)` / `needsInk(r,g,b,a)` / `inkForBlock(style)` / `inkOverride(...)` —
+  pairing a background with its text (see the section above). `INK_LIGHT` and
+  `INK_DARK` are the two ends of the neutral ramp rather than literal white and
+  black, so forced text stays in the theme's charcoal family.
+- `vividFor(h,s,l,t)` — accent handling, against a tuning `t`: saturation to (or
+  near) full via `satFloor` + `satGain`, lightness into `[lMin, lMax]`, then a
+  climb in 0.02 steps until `minContrast` is met or `lCeiling` stops it. Hue is
+  untouched. The climb terminates because luminance rises monotonically with
+  lightness at fixed hue and saturation.
 
   **The climb is where "blue is hard to see, green is easy" lives.** It measures
   real luminance, and the sRGB weights are wildly uneven — blue contributes
   0.0722 where green contributes 0.7152 — so at equal nominal lightness a blue
   is dim and a green already glaring. Blues therefore climb far further than
-  greens with nothing hue-specific in the code: pure blue ends at `l≈0.71`,
-  green stops at `l≈0.59`. Only blues and violets are affected by the value of
-  `MIN_CONTRAST` at all; every other hue clears it on the first try.
+  greens with nothing hue-specific in the code. Only blues and violets are
+  affected by the value of `minContrast` at all; every other hue clears it on the
+  first try.
+- `VIVID_FILL` / `VIVID_INK` — the two tunings. Text is thin strokes and has to
+  carry on color alone, where a fill carries on area, so ink gets a higher band
+  (`0.60–0.74` against `0.54–0.68`) and a higher floor (`INK_MIN_CONTRAST` 5.5
+  against `MIN_CONTRAST` 4.0). Measured, that's brand blue 6.0:1 → 7.0:1 and
+  purple 4.0:1 → 5.7:1, with fills untouched.
+
+  **The saturation curve is identical in both, on purpose.** Raising it for ink
+  is the obvious alternative and it does not work: `satFloor * satGain` already
+  lands every accent at ~0.945 of a possible 1.0, so there is nothing to gain —
+  and in sRGB the only way to add chroma above `l=0.5` is to *remove* lightness.
+  Measured, a more saturated ink tuning lowers contrast (brand blue 6.0:1 → 5.2:1,
+  orange 9.9 → 9.3) for a difference too small to see. Saturation is not the lever
+  here; lightness is. The cost of using
+  it is real but acceptable: raising the band drops chroma 14–20%, which is why
+  `lMax` stops at 0.74 — past `l≈0.72` an HSL color is mixing in white, and
+  greens and olives start reading milky rather than brighter.
 - `relLuminance` / `contrastRatio` / `canvasLuminance` — WCAG 2.1 relative
   luminance. Needed because HSL lightness is **not** perceptual: yellow at
   `l=0.65` is glaring where blue at `l=0.65` is still dim, so a lightness band
@@ -123,12 +199,15 @@ CSS reading & rewriting
   regex can evaluate. Memoized — a sheet reuses the same few colors constantly.
   Validity is detected with **two sentinels**: an unparseable value leaves
   `fillStyle` at whatever preceded it, so the two reads disagree.
-- `remapValue(prop, value, baseHref)` — dispatches on the property.
-  `DIRECT_COLOR` longhands parse whole; `COMPOSITE_COLOR` (gradients) and
-  **custom properties** go through `remapTokens`. Returns `null` for "leave as
-  authored". Remapping a `--token` at its `:root` definition themes every use at
-  once, which is the most redesign-proof thing the transform does.
-- `remapTokens(value, baseHref)` — loose candidate regex, then `parseColor`
+- `remapValue(prop, value, baseHref)` — dispatches on the property, twice over.
+  It picks the **role** from `PROP_ROLE` (defaulting to `ROLE_LINE`) and passes it
+  down; and it picks the shape — `DIRECT_COLOR` longhands parse whole, while
+  `COMPOSITE_COLOR` (gradients) and **custom properties** go through
+  `remapTokens`. Returns `null` for "leave as authored". Remapping a `--token` at
+  its `:root` definition themes every use at once, which is the most
+  redesign-proof thing the transform does — but it's also why tokens can't have a
+  role, since a token has none until something uses it.
+- `remapTokens(value, baseHref, role)` — loose candidate regex, then `parseColor`
   validates each hit. **The regex does not need to be accurate** — a false
   positive like `repeat` is simply rejected. That inverts the usual risk: a regex
   run loose over whole stylesheet text would silently corrupt CSS; scoped to one
@@ -154,6 +233,23 @@ Apply / observe / remove
   `takeRecords()` so our own writes don't feed back in.
 - `removeDark()` — removes injected styles, re-enables originals, restores inline
   styles. Toggling off is fully reversible and live.
+
+Which sites are themed
+
+- `hostListed()` — is this host on the user's list (`SITES_KEY` in
+  `chrome.storage.sync`)? An entry covers the bare host **and every subdomain**,
+  the same reach a `*.example.com` manifest pattern has, so a list entry means
+  what people expect it to. `popup.js` normalizes to a bare host on the way in,
+  so the matcher never has to deal with a scheme, a path or a `www.`.
+- `refresh(animate)` — the theme applies where the master switch is on AND the
+  host is listed. **It compares against `applied` and returns early if nothing
+  changed.** A `storage.sync` write reaches every open tab, so editing the list
+  for *some other* site fires this listener here too — without the guard, every
+  unrelated edit would replay the splash and re-apply an already-applied theme.
+- The gate lives here rather than in dynamically registered content scripts.
+  Injecting everywhere and deciding in one function keeps the whole rule
+  readable, and costs nothing on an unlisted host: nothing in this file runs
+  until `sync()` is called with true.
 
 Toggle-on splash
 
@@ -184,7 +280,7 @@ Toggle-on splash
   still small. So the frame role only decides `playSplash()` vs `applyAtCover()` —
   both delay by the same amount, and the whole page flips at one instant.
   `splashWanted()` is therefore deliberately frame-agnostic: visible tabs only (a
-  storage change reaches every open Cybozu tab, not just the one under the popup)
+  storage change reaches every open tab, not just the one under the popup)
   and it honours `prefers-reduced-motion`. Both read the same inside a subframe.
   When it returns false, `applyDark` runs immediately everywhere.
 - `clearSplash()` — drops the pending cover timer and the node, so toggling off
@@ -196,7 +292,7 @@ Toggle-on splash
   against the whole document, so a bare `#circle` could collide with page markup.
 - Toggling **off** is instant, with no animation.
 
-## Hard-won gotchas (don't relearn these)
+## Gotchas (each one is load-bearing)
 
 1. **Test over HTTP, never `file://`.** Chrome treats every `file://` resource as a
    unique opaque origin, so cross-file CSS reads throw `SecurityError` and `fetch`
@@ -204,14 +300,15 @@ Toggle-on splash
    background alone and **lie to you**. Use a local HTTP server (below).
 
 2. **Anything we inject must be marked `GEN` (`data-moonaroon-gen`)** so the remapper
-   never re-processes it. Forgetting this on the base style caused it to invert its
-   own `#191919` into a light `#dddddd` and wash the page out.
+   never re-processes it. Without the mark, the base style is a stylesheet like
+   any other: its own `#191919` canvas inverts to a light `#dddddd`, washing the
+   whole page out.
 
 3. **Never double-transform a sheet.** The remap is not idempotent (`#fff` → dark →
    light). Each `<link>`/`<style>` is guarded with `PROCESSED` and transformed once.
 
 3a. **Never write to a page `<style>`'s `textContent`. Not even the same value.**
-CSS-in-JS (styled-components, Emotion — e.g. the `sc-*`/hashed classes under `/k/`)
+CSS-in-JS (styled-components, Emotion, and the `sc-*`/hashed-class libraries)
 injects rules via the CSSOM (`insertRule`) and keeps `textContent` empty.
 Assigning `textContent`, _even the same empty string_, makes the browser re-parse
 the element and WIPE the injected rules, destroying layout. This is why
@@ -221,37 +318,57 @@ indices stay valid. Writing to our own overlay is fine — it holds plain text.
 
 3b. **Preserve the `<link media="...">` scope when reinjecting.** A reinjected
 `<style>` defaults to `media="all"`, so a `media="print"` sheet would suddenly
-apply on screen. The `/g/` print stylesheet has `.cloudHeader-grn{position:static
-   !important}` — leaking it on screen overrode the header's runtime `position:fixed`
-and broke the layout. `processLink` copies `link.media` onto the `<style>`. (Cascade
-ORDER is already preserved by inserting each replacement right after its own link,
-so order-dependent rules resolve the same — media was the gap.)
+apply on screen. A print sheet holding something like
+`.header{position:static !important}` then overrides the header's runtime
+`position:fixed` and breaks the layout. `processLink` copies `link.media` onto the
+`<style>`. Cascade ORDER needs no such care — each replacement is inserted
+directly after its own link, so order-dependent rules resolve identically.
 
 4. **Only ever change color _values_ — never selectors, identifiers or property
-   names.** The parser enforces this structurally now, but two real bugs came from
-   losing it when the transform ran over raw text: a global color replace corrupted
-   id selectors that look like hex (`#abc`, `#dad`), and word-boundary keyword
-   matching hit the `gray` inside `var(--component-color-border-gray)`, making the
-   border invalid and reflowing the `/k/` header. If you ever add matching that
-   isn't scoped to one property value, you are reintroducing both.
+   names.** The parser enforces this structurally: it hands over one declaration
+   value at a time, and nothing else is reachable. Matching over raw text is not
+   safe, because CSS reuses color syntax elsewhere — a global color replace
+   corrupts id selectors that look like hex (`#abc`, `#dad`), and word-boundary
+   keyword matching hits the `gray` inside `var(--component-color-border-gray)`,
+   which invalidates the declaration and reflows the page. Any matching that isn't
+   scoped to a single property value reopens both.
 
 5. **In `remapTokens`, protect `url(...)` and quoted strings.** Data-URI SVGs embed
-   colors and `content`/`font-family` values may contain color words. (Shadows need
-   no protection now — `box-shadow`/`text-shadow` simply aren't in
-   `DIRECT_COLOR`/`COMPOSITE_COLOR`, so they're never read. They must stay that
-   way: a light shadow becomes a white glow.) Protected spans are stashed behind
+   colors and `content`/`font-family` values may contain color words. (Shadows
+   need no protection: `box-shadow`/`text-shadow` are absent from
+   `DIRECT_COLOR`/`COMPOSITE_COLOR`, so they're never read. They must stay absent
+   — a light shadow becomes a white glow.) Protected spans are stashed behind
    placeholders delimited by Private-Use Unicode chars (`U+E000` / `U+E001`,
    written as `\uE000`/`\uE001` escapes in the source) — chosen because they
    can't occur in CSS. Keep delimiters out of the normal text range so they never
    collide with stylesheet content; do NOT use NUL bytes (they make the file read
    as binary to `git`/`grep`).
 
-6. **Already-dark elements get flipped the wrong way.** The site styles some elements
-   dark in its _light_ theme (e.g. `.cloudHeader-grn` = `#4b4a4a` with light text).
-   Lightness inversion turns those _light_ — wrong. These can't be auto-detected
-   from a color alone (dark text _should_ invert to light; a dark background should
-   not), so they're handled by hand in the `OVERRIDES` block. Use **doubled-class
-   selectors** (`.x.x`) there to win specificity against the site's own `!important`.
+6. **A color alone cannot be remapped correctly — the role is half the input.**
+   Sites style some elements dark in their _light_ theme (a header bar at
+   `#4b4a4a` with light text on it). Inverting that turns it _light_, which is
+   wrong; but inverting dark _text_ to light is right, and the two are the same
+   three numbers. `PROP_ROLE` is what separates them: a `remapRgb` that takes only
+   a color cannot be correct for both. Its corollary is gotcha 6b — a background
+   and its text must be decided **together**.
+
+6b. **Never change a background's treatment without checking its text.** Keeping
+a dark bar dark while its white label still inverts to near-black is worse than
+the light bar it replaced — the fixture measured 1.04:1. `changedDecls` therefore
+runs `inkForBlock` over the whole declaration block before emitting anything.
+This is also the only place the transform **adds** a declaration the site didn't
+write, so `needsInk` stays narrow: it fires only where the inherited text would
+otherwise be unreadable, never on the ordinary light-neutral background that
+already works.
+
+6c. **Text whose background lives in another rule is only reachable by the
+"light ink stays light" rule.** `.bar{background:#333}` with
+`.bar .title{color:#fff}` gives `changedDecls` no way to pair them — different
+blocks, possibly different sheets, processed in fetch order. Nothing static can
+pair those. What saves it is that near-white text is *already* correct on dark,
+so `ROLE_INK` leaves it alone. Same for text over a background **image**, which
+has no color token to read at all. If that rule is ever weakened, both cases go
+back to black-on-black.
 
 7. **Native form controls & scrollbars have no CSS color** — the browser draws them
    from UA defaults the remapper never sees. `OVERRIDES` forces inputs/textarea/select
@@ -313,48 +430,68 @@ gotcha 13.)
     the browser, even when the popup is showing the other language. That's
     accepted, not a bug to chase.
 
-17. **A stored language must be validated before use.** `chrome.storage.sync`
-    syncs across profiles and can hand back a code from a build that had more
-    languages than this one. `render()` indexes `STRINGS[lang]` directly, so an
-    unknown code would throw and leave the popup blank; the load path checks
-    `STRINGS[stored]` exists and falls back to the browser language.
+17. **Anything read back from `chrome.storage.sync` must be validated.** It syncs
+    across profiles, so it can hand back a value written by a different build.
+    `render()` indexes `STRINGS[lang]` directly, so an unknown language code would
+    throw and leave the popup blank — the load path checks `STRINGS[stored]`
+    exists and falls back to the browser language. The site list gets the same
+    treatment (`Array.isArray`, then `.sort()`, since the returned order isn't
+    necessarily the order it was written in).
+
+18. **A `storage.sync` write reaches every open tab, not just the one under the
+    popup.** So `content.js` cannot act on the change event directly: adding an
+    entry for site A fires the listener in every tab of site B as well, and
+    re-running `sync()` there would replay the splash and re-apply an
+    already-applied theme. `refresh()` compares the newly computed state against
+    `applied` and returns early when nothing changed. The same fact is why
+    `splashWanted()` checks `document.visibilityState`.
 
 ## How to test (the reliable harness)
 
 There is no automated test suite; verification is manual via headless Chrome.
 
-Unit-test the transform in Node (it has no DOM/`chrome` deps once sliced off):
+### Color math in Node
+
+The **color math only** runs headless — slice the file at the `Reading
+stylesheets` banner. Everything past it needs a DOM (`parseColor` paints into a
+`<canvas>`), so `remapValue` and `buildOverlay` can NOT be unit-tested this way;
+they belong in the browser fixture below.
 
 ```js
-// strip the runtime half, import the pure functions
-let src = fs
+const src = fs
   .readFileSync("content.js", "utf8")
-  .replace(
-    /\/\/ -+\n\/\/ Apply \/ remove[\s\S]*$/,
-    "module.exports={remapRgb,remapValue,buildOverlay};",
-  );
+  .split("// " + "-".repeat(75) + "\n// Reading stylesheets")[0];
+// A Function wrapper, not eval: both this file and the slice declare top-level
+// names like rgbToHsl, and re-declaring one is a SyntaxError that kills the
+// whole script.
+const M = new Function(src + "\nreturn {rgbToHsl,vividFor,remapRgb,VIVID_INK};")();
 ```
 
-Then assert: `#fff` → charcoal, brand colors preserved, `#abc{}` selector intact,
-`url()`/strings untouched.
+Good for sweeping a table of hues through `vividFor` and printing chroma and
+contrast per tuning — which is how the `VIVID_INK` numbers were settled, and the
+only way to see that a change helps one hue and hurts another.
 
-Render-test against a **real saved page over HTTP**:
+### Render-test over HTTP
 
-1. Save a logged-in page ("Save Page As → Web Page, Complete"). **Then COPY the
-   capture to a throwaway dir and test there — never generate test files inside the
-   original capture folder.** (A cleanup glob there once deleted the original
-   the original capture; `rm` does not go to Trash.) The captures are the developer's own
-   and are **not** committed to the repo.
-2. `cd <copy> && python3 -m http.server 8731`
-3. Build a test HTML: strip the page's own `<script>`s (they hang headless), inject
-   `content.js` (minus the `chrome.storage` wiring) with `applyDark()` at the end,
-   inject the same into the iframe sub-pages to simulate `all_frames`.
-4. Screenshot: `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
---headless --disable-gpu --window-size=1440,2200 --virtual-time-budget=9000
---screenshot=out.png "http://localhost:8731/test.html"`
-5. To diagnose a specific element, inject a probe that writes
-   `getComputedStyle(el).backgroundColor` into `document.title` and read it with
-   `--dump-dom`.
+Never `file://` (gotcha 1). Serve a directory and point headless Chrome at it:
+
+```
+python3 -m http.server 8731
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless \
+  --disable-gpu --window-size=1440,2200 --virtual-time-budget=9000 \
+  --screenshot=out.png "http://localhost:8731/test.html"
+```
+
+The page under test loads a copy of `content.js` with the `chrome.storage` wiring
+stripped (`src.split("// Initial state")[0]`) and `applyDark()` appended, since
+there's no extension runtime to supply the state.
+
+Against a **real saved page** ("Save Page As → Web Page, Complete"): **copy the
+capture to a throwaway dir and test there — never generate test files inside the
+original capture folder.** A cleanup glob in that folder deletes the capture
+itself, and `rm` does not go to Trash. Captures are the developer's own and are
+**not** committed. Strip the page's own `<script>`s, which hang headless, and
+inject the script into the iframe sub-pages too to simulate `all_frames`.
 
 ### Synthetic fixture
 
@@ -365,23 +502,50 @@ gradients, `light-dark()`, `media="print"`, a `<style>` populated only by
 `insertRule`), plus a driver that reports `getComputedStyle` for each, gives a
 a matrix of what the transform reaches.
 
-Harness details that cost real time:
+**For anything touching roles or the ink pairing, measure contrast, don't look at
+a screenshot.** A second fixture covers one background/text arrangement per row —
+dark bg with same-rule text, dark bg with the text on a *descendant* rule, dark bg
+with inherited text only, bright brand bg with a white label, the same with a
+black label, a colored panel with accent text, a plain light card, and three light
+grays that must stay distinguishable from each other. The driver walks up to the
+first opaque background, computes the WCAG ratio against the element's own text,
+and prints `bg / text / ratio` per row with a `FAIL` marker under 3:1. That's what
+caught the descendant-rule case at 1.04:1, which reads as an ordinary dark bar in
+a screenshot. Run the same snapshot again after `removeDark()` to confirm every
+value returns to the light-theme original.
+
+### Testing the popup
+
+`popup.html` renders outside the extension if a stub is injected **before**
+`strings.js`, since the only APIs it needs are `chrome.storage.sync`,
+`chrome.i18n.getUILanguage` and `chrome.runtime.getManifest`. Back the storage
+stub with a plain object and the popup is fully interactive.
+
+Drive it from a second script that dispatches `submit` on the form and clicks the
+remove buttons, then writes the resulting host list into a `<pre>` and screenshot
+that — the same trick the theme fixture uses, and it works because everything
+here is synchronous. Worth covering: a pasted full URL, `www.`, `*.`, a trailing
+dot, a duplicate, a subdomain of an existing entry, and a non-host. Render the
+empty list and the Japanese strings too — Japanese is the wider script, and it's
+what clipped the input placeholder at 300px.
+
+Harness details worth knowing before they cost an afternoon:
 
 - **A driver script cannot reuse any top-level name from `content.js`.** Both are
   classic scripts sharing one global lexical scope, so re-declaring any top-level
-  name (this bit on `engine`) is a `SyntaxError` that kills the *entire* driver
-  file before its first line runs — with no console output and no `error` event.
-  Wrap the driver in an IIFE.
+  name is a `SyntaxError` that kills the *entire* driver file before its first
+  line runs — with no console output and no `error` event. Wrap the driver in an
+  IIFE.
 - **`--dump-dom` serializes at load, ignoring `--virtual-time-budget`.** Anything
   behind a `setTimeout` or a `fetch` is missing. Either keep assertions
   synchronous, or have the driver POST results to the test server (which honours
   the virtual-time budget when paired with `--screenshot`). `--screenshot=/dev/null`
   makes the run fail — use a real path.
-- **Re-enabling a disabled `<link>` is asynchronous.** After
-  `link.disabled = false` the sheet is missing from `document.styleSheets` and
-  computed colors read as transparent for about a tick. Nothing disables links any
-  more, but this cost an hour of chasing a revert "bug" that wasn't one — assert
-  teardown *after a delay*.
+- **Assert teardown after a delay, not synchronously.** Some style changes settle
+  a tick late — re-enabling a disabled `<link>`, for one: right after
+  `link.disabled = false` the sheet is absent from `document.styleSheets` and
+  computed colors read as transparent. Reading immediately after `removeDark()`
+  reports a revert failure that isn't one.
 - **To screenshot the splash, freeze it.** One screenshot per run only catches one
   moment, and virtual time doesn't let you pick which. Instead call `playSplash`
   from the driver, then `el.getAnimations()[0].pause()` and set `currentTime` to
@@ -407,24 +571,42 @@ Testing hygiene:
 ## Tuning knobs
 
 - **Overall darkness / tint:** `NEUTRAL_HUE`, `NEUTRAL_SAT`, and the lightness curve
-  `0.95 - l * 0.85` in `neutralFor`. The popup palette in `popup.css` should be kept
-  in sync with the values these produce.
-- **How much accents pop:** `VIVID_SAT_FLOOR` / `VIVID_SAT_GAIN` /
-  `VIVID_SAT_CAP` for vividness, `VIVID_L_MIN` / `VIVID_L_MAX` for brightness,
-  `MIN_CONTRAST` for the legibility floor. **Saturation is the lever for "pop";
-  lightness is only for legibility.** Past l≈0.72 an HSL color mixes in white, so
-  raising lightness makes greens and olives go milky rather than vivid — which is
-  also why `MIN_CONTRAST` is kept at 4.0 rather than 4.5: the only colors it
-  changes are blues and violets, and every step it adds makes them paler.
-  `popup.css`'s `--accent` should match whatever `#0e74dd` maps to.
+  `NEUTRAL_L_BASE - l * NEUTRAL_L_SPAN` in `neutralFor`. The popup palette in
+  `popup.css` should be kept in sync with the values these produce.
+- **How dark backgrounds land:** `SURFACE_PEAK` in `neutralSurfaceFor`. Raising it
+  gives already-dark surfaces more room to separate from each other but squeezes
+  the light-neutral surfaces that make up most of a page; lowering it does the
+  reverse. Both halves of the curve are derived from the `NEUTRAL_L_*` constants,
+  so they stay joined wherever the peak sits.
+- **How much accents pop:** the `VIVID_FILL` and `VIVID_INK` objects — `lMin` /
+  `lMax` for brightness, `minContrast` for the legibility floor, `satFloor` /
+  `satGain` / `satCap` for saturation. Tune the two independently; that's the
+  point of their being separate.
+
+  **Lightness is the lever; saturation is already spent.** `satFloor * satGain`
+  puts every accent at ~0.945 of a possible 1.0, so raising it buys ~5% of chroma
+  and *costs* contrast, because above `l=0.5` in sRGB chroma can only be bought
+  with lightness. Going the other way is what works, at a measured 14–20% of
+  chroma per band raise — so past `l≈0.72` greens and olives read milky rather
+  than brighter, which is what `lMax` is guarding.
+
+  `MIN_CONTRAST` stays at 4.0 for fills; only blues and violets are affected by
+  it at all, and every step it adds makes them paler. `INK_MIN_CONTRAST` is 5.5
+  and does double duty — it's also the bar `inkOverride` uses to decide whether an
+  accent text color still reads on its new background. `popup.css`'s `--accent`
+  should match whatever `#0e74dd` maps to.
+- **Which text gets forced:** `needsInk`'s two thresholds — neutral `l < 0.5` and
+  non-neutral `l <= 0.8`. Widening either makes the transform restate `color` on
+  more rules, which overrides more inherited text; that's the cost to weigh.
 - **Per-element fixes:** add rules to the `OVERRIDES` template literal (doubled-class
-  selectors, `!important`). This is the right place for "this specific thing is still
-  light/wrong" requests. It already holds: the cloud-header bar (`HEADER_BG` constant)
-  and its title text, native form controls, and scrollbars (`color-scheme` +
-  `::-webkit-scrollbar`).
-- **Reach more colors:** add properties to `DIRECT_COLOR` / `COMPOSITE_COLOR`.
-  No keyword list is needed — the canvas parser already resolves every named CSS
-  color, so `gray`, `rebeccapurple` and the rest come for free.
+  selectors, `!important`). It currently holds only native form controls and
+  scrollbars (`color-scheme` + `::-webkit-scrollbar`) — things no stylesheet
+  declares. A rule naming one site's markup does not belong there while the
+  extension runs on every host; that needs a per-site overrides store.
+- **Reach more colors:** add properties to `DIRECT_COLOR` / `COMPOSITE_COLOR`, and
+  give them a role in `PROP_ROLE` if they aren't a plain line. No keyword list is
+  needed — the canvas parser already resolves every named CSS color, so `gray`,
+  `rebeccapurple` and the rest come for free.
 
 ## Conventions
 

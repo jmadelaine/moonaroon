@@ -3,7 +3,7 @@
   --surface: #202527; /* elevated row */
   --fg: #f1f3f4; /* primary text */
   --muted: #929fa5; /* secondary text */
-  --accent: #3599ff; /* the site's primary blue as remapRgb vivifies it; unused */
+  --accent: #3599ff; /* a mid blue as remapRgb vivifies it; focus rings */
   --track: #3e474c; /* switch track / borders */
 
   /* The language dropdown's option list is drawn by the OS, outside this page's
@@ -121,6 +121,154 @@ body {
 
 .switch input:checked + .slider::before {
   transform: translateX(27px);
+}
+
+/* ---------------------------------------------------------------------------
+   Site list
+   --------------------------------------------------------------------------- */
+.sites {
+  margin-top: 16px;
+}
+
+.sites-head {
+  margin: 0 0 8px;
+  padding: 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.site-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* About five rows, then it scrolls. A popup has no scrollbar of its own until
+     it hits Chrome's height cap, and hitting that makes the add form fall off
+     the bottom — the one control the list is useless without. */
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+.site-list:empty {
+  display: none;
+}
+
+.site {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 6px 7px 10px;
+  background: var(--surface);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+/* Hosts can be longer than the popup is wide. Truncate the host, never the
+   remove button — min-width:0 is what lets a flex item shrink below its content
+   so the ellipsis actually happens. */
+.site-host {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Icon only, so its name lives in title/aria-label like the bug link. Dim until
+   the row is touched: a column of crosses at full strength reads as a warning. */
+.site-remove {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: #565f64;
+  cursor: pointer;
+}
+
+.site:hover .site-remove,
+.site-remove:focus-visible {
+  color: var(--fg);
+}
+
+.site-remove:hover {
+  background: #2c3336;
+}
+
+.site-remove svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.site-empty {
+  margin: 0 0 8px;
+  padding: 0 2px;
+  font-size: 12px;
+  color: #565f64;
+}
+
+.site-add {
+  display: flex;
+  gap: 6px;
+}
+
+.site-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--track);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.site-input::placeholder {
+  color: #565f64;
+}
+
+.site-input:focus-visible,
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Invalid input is shown on the field rather than as a message: there's only one
+   field and one rule, so a line of prose would say nothing the red doesn't. */
+.site-input.invalid {
+  border-color: #ff5b6f;
+}
+
+.btn {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--track);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: #4c565c;
 }
 
 /* Secondary controls, stacked at the right end of the header row and right-aligned

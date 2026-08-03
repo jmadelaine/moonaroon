@@ -1,10 +1,10 @@
 {
   "extDescription": {
-    "message": "Dark mode for cybozu.com.",
+    "message": "Dark mode for any site.",
     "description": "Extension description, shown in chrome://extensions and the Web Store."
   },
   "extTitle": {
-    "message": "Moonaroon — Dark mode for cybozu.com",
+    "message": "Moonaroon — Dark mode for any site",
     "description": "Toolbar button tooltip."
   }
 }

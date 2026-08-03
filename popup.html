@@ -11,7 +11,7 @@
       <img class="moon" src="icons/moon.svg" alt="" width="34" height="34" />
       <div class="titles">
         <h1>Moonaroon</h1>
-        <p data-i18n="tagline">Dark mode for cybozu.com</p>
+        <p data-i18n="tagline">Dark mode for any site</p>
       </div>
       <div class="aside">
         <div class="lang">
@@ -48,6 +48,29 @@
         <span class="slider"></span>
       </span>
     </label>
+
+    <section class="sites">
+      <h2 class="sites-head" data-i18n="sitesLabel">Sites</h2>
+
+      <!-- Filled by popup.js. Above the form, so a newly added entry appears
+           right where the eye already is rather than pushing the form down. -->
+      <ul class="site-list" id="site-list"></ul>
+
+      <!-- A real <form> so Enter in the field submits, which is how anyone types
+           a list of things. The button is type=submit for the same reason. -->
+      <form class="site-add" id="site-add">
+        <input
+          type="text"
+          id="site-input"
+          class="site-input"
+          autocomplete="off"
+          spellcheck="false"
+          data-i18n-placeholder="sitePlaceholder"
+          data-i18n-title="sitesLabel"
+        />
+        <button type="submit" class="btn" data-i18n="addSite">Add</button>
+      </form>
+    </section>
 
     <script src="strings.js"></script>
     <script src="popup.js"></script>

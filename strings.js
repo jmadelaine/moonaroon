@@ -2,15 +2,15 @@
 //
 // These deliberately do NOT go through chrome.i18n.getMessage(). That API always
 // resolves to the browser UI language and offers no runtime override, so the
-// language button in the popup could never win against it. A plain table read
+// language picker in the popup cannot win against it. A plain table read
 // synchronously also means the popup paints already translated — a fetch would
 // show English for a frame first.
 //
-// _locales/ still exists, but only for the two manifest strings (extension
-// description and toolbar tooltip). Chrome resolves those itself before any of our
-// code runs and no extension can override them, so they live there and nowhere
-// else. Adding a UI string means adding it here; adding a manifest string means
-// adding it to every _locales/<lang>/messages.json.
+// _locales/ carries the two manifest strings only (extension description and
+// toolbar tooltip). Chrome resolves those itself before any extension code runs
+// and nothing can override them, so they belong there and nowhere else. Adding a
+// UI string means adding it here; adding a manifest string means adding it to
+// every _locales/<lang>/messages.json.
 
 // Order matters: it's the order of the language dropdown. LANGS[0] is also the
 // fallback when the browser language isn't one we have.
@@ -29,7 +29,7 @@ const LANG_NAMES = {
 
 const STRINGS = {
   en: {
-    tagline: "Dark mode for cybozu.com",
+    tagline: "Dark mode for any site",
     // Tooltip and accessible name for the icon-only bug link — it has no visible
     // text, so this is the only thing naming it.
     reportBug: "Report a bug",
@@ -46,9 +46,14 @@ const STRINGS = {
     ],
     issueWhat: "**What happened?**",
     issueWhere: "**Where?** (the page URL, and which screen)",
+    sitesLabel: "Sites",
+    sitesEmpty: "No sites yet. Add one below.",
+    sitePlaceholder: "Add a site for dark mode",
+    addSite: "Add",
+    removeSite: "Remove",
   },
   ja: {
-    tagline: "cybozu.com をダークモードに",
+    tagline: "どんなサイトもダークモードに",
     reportBug: "不具合を報告",
     langLabel: "言語",
     off: "ダークモードはオフ",
@@ -61,5 +66,12 @@ const STRINGS = {
     ],
     issueWhat: "**何が起きましたか？**",
     issueWhere: "**どこで？**（ページの URL と、画面名）",
+    sitesLabel: "対象サイト",
+    sitesEmpty: "まだありません。下から追加してください。",
+    // Fits the field at 300px. "…を追加" as well would clip — the Add button
+    // beside it already says that.
+    sitePlaceholder: "ダークモードにするサイト",
+    addSite: "追加",
+    removeSite: "削除",
   },
 };
