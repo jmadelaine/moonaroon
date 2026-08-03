@@ -602,13 +602,16 @@ function remapValue(prop, value, baseHref) {
 //
 // Returns the remapped background too, so a caller can test whether a text color
 // the site actually declared still reads against it.
-function inkForBlock(style) {
-  const bgValue = style.getPropertyValue("background-color");
+function inkForBg(bgValue) {
   if (!bgValue || SKIP_VALUE.test(bgValue)) return null;
   const parsed = parseColor(bgValue.trim());
   if (!parsed || !needsInk(...parsed)) return null;
   const bg = remapRgb(parsed[0], parsed[1], parsed[2], ROLE_SURFACE);
   return { ink: inkFor(bg), bg };
+}
+
+function inkForBlock(style) {
+  return inkForBg(style.getPropertyValue("background-color"));
 }
 
 // Keep a text color the site declared if it's an accent that still reads on the
@@ -922,57 +925,110 @@ function withPaused(fn) {
 }
 
 // Rewrite inline style="" attributes (some colors are set via JS at runtime).
+// Longhands only — never a shorthand AND its longhand together. A shorthand like
+// `background:` or `border-color:` sets the longhands, so reading the longhand
+// catches the same color; processing both would remap it twice (e.g.
+// background:#fff -> dark -> light again).
+const INLINE_PROPS = [
+  "color",
+  "background-color",
+  "border-top-color",
+  "border-right-color",
+  "border-bottom-color",
+  "border-left-color",
+  "outline-color",
+  "fill",
+  "stroke",
+];
+
+// What we did to one element's inline style, as `prop::original::written||`.
+// Storing what we WROTE as well as what was there is what makes a second pass
+// safe: a page that updates one property leaves our value sitting in the
+// attribute beside it, and remapping our own output inverts it back to light.
+// Comparing against `written` tells the two apart. It lives in a data attribute
+// rather than a WeakMap so removeDark can find every touched element with one
+// querySelectorAll, and so nothing is retained once an element is dropped.
+function readInlineRecords(el) {
+  const map = new Map();
+  const raw = el.dataset.moonaroonOrig;
+  if (!raw) return map;
+  for (const entry of raw.split("||")) {
+    if (!entry) continue;
+    const [prop, orig, written] = entry.split("::");
+    map.set(prop, { orig, written });
+  }
+  return map;
+}
+
+function writeInlineRecords(el, map) {
+  if (!map.size) {
+    delete el.dataset.moonaroonOrig;
+    return;
+  }
+  let out = "";
+  for (const [prop, r] of map) out += `${prop}::${r.orig}::${r.written}||`;
+  el.dataset.moonaroonOrig = out;
+}
+
+// Remap one element's inline style, in place — nothing outranks a style
+// attribute short of !important, so there is no overlay to hide behind. Safe to
+// run repeatedly on the same element.
+function remapInlineStyle(el) {
+  if (el.getAttribute(GEN)) return;
+  if (!el.hasAttribute("style")) {
+    // The page dropped the attribute, taking our values with it.
+    delete el.dataset.moonaroonOrig;
+    el.removeAttribute(PROCESSED);
+    return;
+  }
+  const records = readInlineRecords(el);
+  // Pair background and text as a stylesheet rule does — but off the ORIGINAL
+  // background, because ours is already dark and would read as a surface that
+  // needs light text forced onto it.
+  const bgRec = records.get("background-color");
+  const block = inkForBg(
+    bgRec ? bgRec.orig : el.style.getPropertyValue("background-color"),
+  );
+  let changed = false;
+  for (const prop of INLINE_PROPS) {
+    const cur = el.style.getPropertyValue(prop);
+    const rec = records.get(prop);
+    if (rec && cur === rec.written) continue; // ours, untouched
+    if (rec) records.delete(prop); // the page replaced it — start over
+    if (!cur && !(prop === "color" && block)) continue;
+    const next =
+      prop === "color" && block
+        ? inkOverride(cur, block)
+        : remapValue(prop, cur, document.baseURI);
+    if (next === null || next === cur) continue;
+    el.style.setProperty(prop, next, el.style.getPropertyPriority(prop));
+    // Record what the CSSOM reports, not the hex handed to setProperty: it
+    // normalizes `#171a1c` to `rgb(23, 26, 28)`, and a `written` that never
+    // matches a later read would make every pass treat our own output as a
+    // fresh value from the page. An empty `orig` restores as a removeProperty,
+    // which is what undoes a color added to an element that had none.
+    records.set(prop, { orig: cur, written: el.style.getPropertyValue(prop) });
+    changed = true;
+  }
+  writeInlineRecords(el, records);
+  if (changed) el.setAttribute(PROCESSED, "1");
+}
+
 function processInlineStyles(root) {
+  // The root is examined itself, not just searched. querySelectorAll returns
+  // descendants only, and the observer hands over the exact element whose style
+  // attribute changed — so skipping the root skips every dynamic inline style.
+  if (root.nodeType === 1) remapInlineStyle(root);
   if (!root.querySelectorAll) return;
-  // Let the selector engine drop the elements we've already handled. scan() runs
-  // this over the whole document six times per apply, so on a page with a few
+  // Let the selector engine drop the elements already handled. scan() runs this
+  // over the whole document six times per apply, so on a page with a few
   // thousand styled elements the difference is thousands of native matches
-  // against thousands of JS attribute reads.
+  // against thousands of JS attribute reads. The root is exempt above: it is
+  // named because it changed, so it has to be looked at again.
   const els = root.querySelectorAll(
     `[style]:not([${PROCESSED}]):not([${GEN}])`,
   );
-  for (const el of els) {
-    let changed = false;
-    // Same background/text pairing as a stylesheet rule. An inline background is
-    // if anything more likely to be a hand-placed dark box than a rule is.
-    const block = inkForBlock(el.style);
-    const stash = (prop, val) => {
-      el.dataset.moonaroonOrig =
-        (el.dataset.moonaroonOrig || "") + `${prop}::${val}||`;
-    };
-    // Longhands only — never a shorthand AND its longhand together. A shorthand
-    // like `background:` or `border-color:` sets the longhands, so reading the
-    // longhand catches the same color; processing both would remap it twice
-    // (e.g. background:#fff -> dark -> light again).
-    for (const prop of [
-      "color",
-      "background-color",
-      "border-top-color",
-      "border-right-color",
-      "border-bottom-color",
-      "border-left-color",
-      "outline-color",
-      "fill",
-      "stroke",
-    ]) {
-      const val = el.style.getPropertyValue(prop);
-      if (!val && !(prop === "color" && block)) continue;
-      // Inline styles can't be overlaid — nothing outranks them short of
-      // !important — so these are rewritten in place.
-      const next =
-        prop === "color" && block
-          ? inkOverride(val, block)
-          : remapValue(prop, val, document.baseURI);
-      if (next !== null && next !== val) {
-        // An empty stashed value restores as a removeProperty, which is what
-        // undoes a color we added to an element that had none.
-        stash(prop, val);
-        el.style.setProperty(prop, next, el.style.getPropertyPriority(prop));
-        changed = true;
-      }
-    }
-    if (changed) el.setAttribute(PROCESSED, "1");
-  }
+  for (const el of els) remapInlineStyle(el);
 }
 
 function scan() {
@@ -1029,8 +1085,9 @@ function applyDark() {
         m.target.tagName !== "LINK" &&
         !m.target.getAttribute(GEN)
       ) {
-        m.target.removeAttribute(PROCESSED);
-        delete m.target.dataset.moonaroonOrig;
+        // The saved records are deliberately left in place: they are what lets
+        // remapInlineStyle tell the property the page just changed from the ones
+        // still holding our own output.
         inlineRoots.push(m.target);
       }
     }
@@ -1071,14 +1128,9 @@ function removeDark() {
   // No source sheet was ever disabled or edited, so there is nothing to
   // restore beyond our own nodes and the inline styles below.
   for (const el of document.querySelectorAll(`[${PROCESSED}]`)) {
-    if (el.dataset.moonaroonOrig) {
-      for (const entry of el.dataset.moonaroonOrig.split("||")) {
-        if (!entry) continue;
-        const idx = entry.indexOf("::");
-        el.style.setProperty(entry.slice(0, idx), entry.slice(idx + 2));
-      }
-      delete el.dataset.moonaroonOrig;
-    }
+    for (const [prop, rec] of readInlineRecords(el))
+      el.style.setProperty(prop, rec.orig);
+    delete el.dataset.moonaroonOrig;
     el.removeAttribute(PROCESSED);
   }
 }

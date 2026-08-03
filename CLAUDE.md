@@ -252,6 +252,13 @@ Apply / observe / remove
 - `applyDark()` — injects the base style (canvas background + `OVERRIDES`), runs
   `scan()`, and starts a `MutationObserver` for dynamically added sheets/styles/
   inline styles. Also re-scans on `DOMContentLoaded`, `load`, and a few timers.
+- `remapInlineStyle(el)` — rewrites one element's inline style in place, since
+  nothing outranks a `style` attribute short of `!important`. Idempotent by
+  design; see gotchas 7c and 7d, which are the whole reason it looks the way it
+  does. `readInlineRecords`/`writeInlineRecords` keep the per-property
+  `original`/`written` pairs in a data attribute rather than a `WeakMap`, so
+  `removeDark` can find every touched element with one `querySelectorAll` and
+  nothing is retained when an element is dropped from the page.
 - `scan()` / `processLink` / `processStyleEl` / `processInlineStyles` — do the
   work. `scan()` runs six times per apply (immediately, on `DOMContentLoaded`, on
   `load`, and on three timers), so each of these has to be near-free once there
@@ -405,13 +412,34 @@ back to black-on-black.
    to a dark field with light text, sets `color-scheme: dark` + `scrollbar-color`, and
    adds `::-webkit-scrollbar` rules so native scrollbars are charcoal.
 
-7b. **Inline-style remapping uses longhands only.** `processInlineStyles` must not
+7b. **Inline-style remapping uses longhands only.** `remapInlineStyle` must not
 read both a shorthand and its longhand (`background` + `background-color`,
 `border-color` + `border-*-color`): remapping the shorthand sets the longhand, then
 reading the longhand and remapping again double-inverts it (`#fff` → dark → light).
 It reads only longhands, which already reflect whatever a shorthand set. (The
 stylesheet path can't hit this — the CSSOM hands us pre-expanded longhands, see
 gotcha 13.)
+
+7c. **`querySelectorAll` never returns the element it is called on.** So
+`processInlineStyles` examines its root separately from searching it. This is not
+a detail: the observer hands over *the element whose `style` attribute changed*,
+and every element added after the last `scan()` timer arrives the same way. Search
+only the descendants and the entire dynamic half of inline theming silently does
+nothing, while a static page still looks perfect — `scan()` passes `document`,
+which has no style attribute of its own to miss.
+
+7d. **An inline style can be remapped more than once, so it must be idempotent.**
+A page that sets one unrelated property (`el.style.left = "10px"`) leaves our
+colors sitting in the attribute beside it and fires an attribute mutation. Reading
+those back as if the page had written them re-inverts them. `remapInlineStyle`
+therefore records `prop::original::written` and skips any property whose current
+value still equals `written`.
+
+**Record what the CSSOM reports, not what was passed to `setProperty`.** It
+normalizes `#171a1c` to `rgb(23, 26, 28)`, so a `written` taken from our own hex
+never matches a later read, every pass treats our output as fresh input, and the
+saved `original` decays into our own dark value — which surfaces as `removeDark`
+restoring the page to the theme rather than to the site.
 
 8. **Background _images_ with baked-in light colors are not touched** — there's no
    color token to remap. Those would need a targeted `filter` rule.
@@ -569,6 +597,22 @@ an append after a delete, and an appended `@media` block — the last three are 
 fallback path, and the mid-list insert is the one that silently emits the wrong
 rules if the `tail` check is ever dropped. Assert `overlay.textContent` matches
 the accumulated string too, or the two can drift without any visible symptom.
+
+### Dynamic inline styles
+
+The static fixtures cannot see gotchas 7c and 7d, because everything they contain
+is present before the first `scan()`. Cover the dynamic half separately: after the
+last retry timer (2500ms) has passed, add an element with an inline style and no
+styled descendants, add one that *has* a styled descendant, set a `style`
+attribute on an element that had none, touch a single unrelated property on an
+element already themed, and rewrite a whole `style` attribute. Then call
+`removeDark()` and assert every element is back to its authored value — that last
+step is what catches a `written` record that never matches, since the theme still
+looks right until teardown.
+
+Include a dark inline box (`background:#4b4a4a;color:#fff`) and check the label
+stays light. And note that a forced light label is `INK_LIGHT`, not `#ffffff` —
+asserting pure white there fails against correct output.
 
 ### Testing the popup
 
