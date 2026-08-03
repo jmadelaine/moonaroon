@@ -1,0 +1,89 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>inline-dynamic</title>
+<body style="font: 14px sans-serif">
+  <!-- Everything here happens AFTER the last scan() retry timer (2500ms), so
+       only the MutationObserver can reach it. A fixture built before the first
+       scan cannot see any of these: a static page is themed by the initial
+       sweep whether or not the observer works at all. -->
+  <div id="host"></div>
+
+  <script src="/test/browser/harness.js"></script>
+  <script src="/theme.js"></script>
+  <script>
+    (function () {
+      applyDark();
+
+      const host = document.getElementById("host");
+      const add = (id, style, inner) => {
+        const d = document.createElement("div");
+        d.id = id;
+        if (style) d.setAttribute("style", style);
+        d.innerHTML = inner || id;
+        host.append(d);
+        return d;
+      };
+      const el = (id) => document.getElementById(id);
+      const bgOf = (id) => getComputedStyle(el(id)).backgroundColor;
+
+      setTimeout(function () {
+        const a = add("a", "background:#ffffff;color:#222222");
+        const b = add("b", "background:#ffffff;color:#222222", '<span id="bs" style="color:#333333">c</span>');
+        const c = add("c", null, "c");
+        const d = add("d", "background:#4b4a4a;color:#ffffff");
+        const e = add("e", "background:#ffffff;color:#222222");
+        const f = add("f", "background:#ffffff;color:#222222");
+
+        setTimeout(function () {
+          c.setAttribute("style", "background:#ffffff;color:#222222");
+          // One unrelated property. Our colors stay in the attribute beside it,
+          // and re-reading them as page input would invert them back to light.
+          e.style.left = "10px";
+          // A wholesale rewrite: genuinely new values that must be remapped.
+          f.setAttribute("style", "background:#ffffff;color:#222222;top:1px");
+        }, 150);
+
+        setTimeout(function () {
+          for (const [id, what] of [
+            ["a", "element added later"],
+            ["b", "element added later with a styled child"],
+            ["c", "style attribute set later"],
+            ["e", "survives one unrelated property changing"],
+            ["f", "survives a whole attribute rewrite"],
+          ])
+            T.ok(what, T.dark(bgOf(id)), `#${id} background=${bgOf(id)}`);
+
+          T.ok("styled descendant of an added element", T.dark(getComputedStyle(el("bs")).color) === false, `color=${getComputedStyle(el("bs")).color}`);
+
+          // A hand-placed dark box: the background stays dark and the label
+          // stays light, exactly as for a stylesheet rule.
+          T.ok("inline dark box stays dark", T.dark(bgOf("d")), `background=${bgOf("d")}`);
+          T.readable("inline dark box keeps a readable label", el("d"), 4);
+
+          const originals = {
+            a: ["rgb(255, 255, 255)", "rgb(34, 34, 34)"],
+            b: ["rgb(255, 255, 255)", "rgb(34, 34, 34)"],
+            c: ["rgb(255, 255, 255)", "rgb(34, 34, 34)"],
+            d: ["rgb(75, 74, 74)", "rgb(255, 255, 255)"],
+            e: ["rgb(255, 255, 255)", "rgb(34, 34, 34)"],
+            f: ["rgb(255, 255, 255)", "rgb(34, 34, 34)"],
+          };
+
+          removeDark();
+          setTimeout(function () {
+            for (const id of Object.keys(originals)) {
+              const cs = getComputedStyle(el(id));
+              const want = originals[id];
+              T.ok(
+                `#${id} restores to its authored inline style`,
+                cs.backgroundColor === want[0] && cs.color === want[1],
+                `got ${cs.backgroundColor} / ${cs.color}, want ${want[0]} / ${want[1]}`,
+              );
+            }
+            T.done();
+          }, 400);
+        }, 900);
+      }, 3200);
+    })();
+  </script>
+</body>

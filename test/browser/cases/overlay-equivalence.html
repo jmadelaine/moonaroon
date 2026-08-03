@@ -1,0 +1,94 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>overlay-equivalence</title>
+<body>
+  <!-- pollTrackedSheets has two routes to the same CSS: extend the accumulated
+       string with the rules past `count`, or rebuild the whole thing. The fast
+       route is only valid while the sheet has been appended to, and insertRule
+       can splice into the middle — so the two must be proven to agree, case by
+       case. The mid-list insert is the one that silently emits the wrong rules
+       if the `tail` guard is ever dropped. -->
+  <script src="/test/browser/harness.js"></script>
+  <script src="/theme.js"></script>
+  <script>
+    (function () {
+      const fresh = () => {
+        const sheet = document.createElement("style");
+        document.head.append(sheet);
+        const overlay = document.createElement("style");
+        document.head.append(overlay);
+        const tracked = {
+          sheet: sheet.sheet,
+          base: document.baseURI,
+          overlay,
+          css: "",
+          count: 0,
+          tail: "",
+        };
+        trackedSheets.length = 0;
+        trackedSheets.push(tracked);
+        return [sheet, tracked];
+      };
+
+      const agrees = (name, tracked, sheet) => {
+        const full = buildOverlay(sheet.cssRules, document.baseURI);
+        T.ok(
+          name,
+          tracked.css === full,
+          `incremental ${tracked.css.length} bytes vs full rebuild ${full.length}`,
+        );
+      };
+
+      const [s, t] = fresh();
+
+      for (let round = 0; round < 4; round++) {
+        for (let i = 0; i < 10; i++)
+          s.sheet.insertRule(
+            `.a${round}-${i}{background:#ffffff;color:#333333}`,
+            s.sheet.cssRules.length,
+          );
+        pollTrackedSheets();
+      }
+      agrees("append-only across several ticks", t, s.sheet);
+
+      s.sheet.insertRule(".mid{background:#0e74dd;color:#ffffff}", 5);
+      pollTrackedSheets();
+      agrees("a rule spliced into the middle falls back", t, s.sheet);
+
+      s.sheet.deleteRule(0);
+      pollTrackedSheets();
+      agrees("deleteRule falls back", t, s.sheet);
+
+      for (let i = 0; i < 5; i++)
+        s.sheet.insertRule(`.z${i}{background:#eeeeee}`, s.sheet.cssRules.length);
+      pollTrackedSheets();
+      agrees("appending after a delete", t, s.sheet);
+
+      s.sheet.insertRule(
+        "@media screen{.m{background:#ffffff;color:#222222}}",
+        s.sheet.cssRules.length,
+      );
+      pollTrackedSheets();
+      agrees("an appended @media block", t, s.sheet);
+
+      s.sheet.insertRule("@layer x{.l{background:#fafafa}}", s.sheet.cssRules.length);
+      pollTrackedSheets();
+      agrees("an appended @layer block", t, s.sheet);
+
+      // The node the browser reads and the string we track must not drift, or
+      // the next append is built on top of something that was never applied.
+      T.ok(
+        "the overlay node matches the accumulated string",
+        t.overlay.textContent === t.css,
+        `node ${t.overlay.textContent.length} bytes vs tracked ${t.css.length}`,
+      );
+
+      // A tick with no change must do nothing at all.
+      const before = t.css;
+      pollTrackedSheets();
+      T.ok("an unchanged sheet is left alone", t.css === before, "css was rewritten");
+
+      T.done();
+    })();
+  </script>
+</body>

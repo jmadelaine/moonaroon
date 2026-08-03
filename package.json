@@ -1,0 +1,10 @@
+{
+  "name": "moonaroon",
+  "private": true,
+  "description": "Test runner wiring only. The extension itself has no dependencies and no build step — Chrome loads this folder as-is.",
+  "scripts": {
+    "test": "npm run test:color && npm run test:browser",
+    "test:color": "node --test \"test/**/*.test.js\"",
+    "test:browser": "node test/browser/run.js"
+  }
+}

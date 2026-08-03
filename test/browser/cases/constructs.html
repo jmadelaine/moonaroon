@@ -1,0 +1,120 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>constructs</title>
+<link rel="stylesheet" href="/test/browser/cases/constructs.css" />
+<style>
+  /* A <style> element: same-origin, read from the live CSSOM with no fetch. */
+  .style-el {
+    background: #ffffff;
+    color: #444444;
+  }
+</style>
+<body>
+  <div class="linked">linked sheet</div>
+  <div class="nested">native nesting <span class="deep">deep</span></div>
+  <div class="modern">oklch / lab / space-separated rgb</div>
+  <div class="alpha8">8-digit hex</div>
+  <div class="scrim">translucent scrim</div>
+  <div class="token">var() token</div>
+  <div class="layered">@layer</div>
+  <div class="grad">gradient</div>
+  <div class="lightdark">light-dark()</div>
+  <div class="style-el">style element</div>
+  <div class="cssinjs">insertRule only</div>
+  <div class="urlbg">url() background</div>
+  <div id="abc">id that looks like hex</div>
+  <div class="keyword">named color</div>
+  <p><input value="input" /> <select><option>select</option></select></p>
+
+  <script src="/test/browser/harness.js"></script>
+  <script>
+    // A sheet populated only through insertRule, with an empty textContent —
+    // how styled-components and Emotion inject. Built before the theme applies.
+    (function () {
+      const s = document.createElement("style");
+      document.head.append(s);
+      s.sheet.insertRule(".cssinjs{background:#ffffff;color:#333333}", 0);
+    })();
+  </script>
+  <script src="/theme.js"></script>
+  <script>
+    (function () {
+      applyDark();
+      setTimeout(function () {
+        const q = (s) => document.querySelector(s);
+        const bg = (s) => getComputedStyle(q(s)).backgroundColor;
+        const fg = (s) => getComputedStyle(q(s)).color;
+        const themedDark = (name, sel) =>
+          T.ok(name, T.dark(bg(sel)), `background=${bg(sel)}`);
+
+        // Each construct is reachable only because the browser's own parser is
+        // doing the reading. A regex over the text misses every one of them.
+        themedDark("linked stylesheet is themed", ".linked");
+        themedDark("a rule with a nested block keeps its own declarations", ".nested");
+        themedDark("nested child rule", ".nested .deep");
+        themedDark("style element read from the live CSSOM", ".style-el");
+        themedDark("rules added only through insertRule", ".cssinjs");
+        themedDark("@layer block", ".layered");
+        const a8 = bg(".alpha8");
+        T.ok(
+          "8-digit hex is parsed and keeps its alpha",
+          /^rgba\(/.test(a8) && !/14, 116, 221/.test(a8),
+          `background=${a8} (authored #0e74ddcc)`,
+        );
+        T.ok(
+          "translucent near-white is left as a scrim",
+          !T.dark(bg(".scrim")),
+          `background=${bg(".scrim")}`,
+        );
+        themedDark("var() token remapped at its definition", ".token");
+        themedDark("named color keyword", ".keyword");
+
+        T.ok(
+          "modern color syntax is parsed, not pattern-matched",
+          !T.dark(fg(".modern")) && T.contrast(fg(".modern"), T.bgOf(q(".modern"))) > 4,
+          `color=${fg(".modern")}`,
+        );
+
+        const g = getComputedStyle(q(".grad")).backgroundImage;
+        T.ok("gradient stops are remapped", /gradient/.test(g) && !/255, 255, 255/.test(g), g);
+
+        // OVERRIDES sets color-scheme:dark, so the browser already serves the
+        // site's own dark branch. Rewriting it would invert that into a light
+        // color — worse than doing nothing.
+        T.ok(
+          "light-dark() is left for the browser to resolve",
+          T.dark(bg(".lightdark")),
+          `background=${bg(".lightdark")} (want the authored dark branch, #111)`,
+        );
+
+        // Only VALUES may change. A url() carries colors we cannot evaluate and
+        // an id selector can look like a hex literal.
+        T.ok(
+          "url() background survives untouched",
+          /url\(/.test(getComputedStyle(q(".urlbg")).backgroundImage),
+          getComputedStyle(q(".urlbg")).backgroundImage,
+        );
+        T.ok(
+          "#abc still matches its element",
+          getComputedStyle(q("#abc")).paddingLeft === "7px",
+          `padding-left=${getComputedStyle(q("#abc")).paddingLeft} (rule intact => 7px)`,
+        );
+        T.ok(
+          "a var(--...-gray) border stays valid",
+          getComputedStyle(q(".keyword")).borderLeftWidth === "3px",
+          `border-left-width=${getComputedStyle(q(".keyword")).borderLeftWidth}`,
+        );
+
+        // Native controls have no CSS color for the remap to read.
+        T.ok("native input is dark", T.dark(bg("input")), `background=${bg("input")}`);
+        T.ok(
+          "color-scheme is dark",
+          getComputedStyle(document.documentElement).colorScheme === "dark",
+          getComputedStyle(document.documentElement).colorScheme,
+        );
+
+        T.done();
+      }, 1200);
+    })();
+  </script>
+</body>

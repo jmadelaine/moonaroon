@@ -1,0 +1,29 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The colour math is pure arithmetic and needs nothing but Node.
+      - run: npm run test:color
+
+      # The transform needs a real browser: parseColor paints into a <canvas>
+      # and buildOverlay walks live CSSOM rule objects. The runner finds Chrome
+      # through CHROME_PATH or a short list of usual locations.
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+
+      - run: npm run test:browser
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}

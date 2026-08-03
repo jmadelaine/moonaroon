@@ -1,0 +1,103 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>roundtrip</title>
+<link rel="stylesheet" href="/test/browser/cases/constructs.css" />
+<style>
+  .style-el { background: #ffffff; color: #444444; }
+</style>
+<body>
+  <!-- Toggling off has to be exact, not approximate: the site's own colors are
+       never edited, so anything left behind is a value the transform wrote and
+       failed to take back. This is the cheapest assertion in the suite and the
+       one most likely to catch a bookkeeping mistake — a page can look perfectly
+       themed while its saved originals have quietly decayed. -->
+  <div class="linked">linked</div>
+  <div class="nested">nested <span class="deep">deep</span></div>
+  <div class="modern">modern</div>
+  <div class="alpha8">alpha</div>
+  <div class="scrim">scrim</div>
+  <div class="token">token</div>
+  <div class="layered">layered</div>
+  <div class="grad">gradient</div>
+  <div class="style-el">style el</div>
+  <div class="keyword">keyword</div>
+  <div id="abc">abc</div>
+  <div style="background: #ffffff; color: #222222">inline style</div>
+  <div style="background: #4b4a4a; color: #ffffff">inline dark box</div>
+  <p><input value="input" /> <select><option>select</option></select></p>
+
+  <script src="/test/browser/harness.js"></script>
+  <script src="/theme.js"></script>
+  <script>
+    (function () {
+      // Wait for the linked sheet before snapshotting, or "before" would record
+      // unstyled defaults and the comparison would prove nothing.
+      window.addEventListener("load", function () {
+        setTimeout(function () {
+          const before = T.snapshot();
+          T.ok("page has styles to compare", before.length > 5, `${before.length} elements`);
+
+          applyDark();
+          setTimeout(function () {
+            const during = T.snapshot();
+            let changed = 0;
+            for (let i = 0; i < before.length; i++) if (before[i] !== during[i]) changed++;
+            T.ok(
+              "the theme actually changed something",
+              changed > 5,
+              `${changed} of ${before.length} elements differ while dark`,
+            );
+
+            removeDark();
+            // Assert teardown after a delay: some style changes settle a tick
+            // late, and reading immediately reports a revert failure that isn't.
+            setTimeout(function () {
+              const after = T.snapshot();
+              const diffs = [];
+              for (let i = 0; i < before.length; i++)
+                if (before[i] !== after[i])
+                  diffs.push(`#${i}\n           was ${before[i]}\n           now ${after[i]}`);
+              T.ok(
+                "every computed color returns to its authored value",
+                diffs.length === 0,
+                diffs.slice(0, 4).join("\n         "),
+              );
+
+              // Our own nodes and marks must be gone too, or a second apply
+              // would skip elements it has never actually handled.
+              T.ok(
+                "no injected style nodes remain",
+                document.querySelectorAll("[data-moonaroon-gen]").length === 0,
+                `${document.querySelectorAll("[data-moonaroon-gen]").length} left`,
+              );
+              T.ok(
+                "no processed marks remain",
+                document.querySelectorAll("[data-moonaroon]").length === 0,
+                `${document.querySelectorAll("[data-moonaroon]").length} left`,
+              );
+              T.ok(
+                "no saved inline records remain",
+                document.querySelectorAll("[data-moonaroon-orig]").length === 0,
+                `${document.querySelectorAll("[data-moonaroon-orig]").length} left`,
+              );
+
+              // Applying again from a clean slate must reach the same place.
+              applyDark();
+              setTimeout(function () {
+                const again = T.snapshot();
+                let same = 0;
+                for (let i = 0; i < during.length; i++) if (during[i] === again[i]) same++;
+                T.ok(
+                  "a second apply reproduces the first",
+                  same === during.length,
+                  `${during.length - same} of ${during.length} elements differ`,
+                );
+                T.done();
+              }, 700);
+            }, 400);
+          }, 900);
+        }, 200);
+      });
+    })();
+  </script>
+</body>

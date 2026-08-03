@@ -1,0 +1,91 @@
+/* One construct per rule. Served over HTTP, never file:// — Chrome treats every
+   file:// resource as a unique opaque origin, so the cross-origin reads this
+   transform depends on behave differently there. */
+
+:root {
+  --panel: #ffffff;
+  --component-color-border-gray: #dddddd;
+}
+
+body {
+  background: #f5f6f7;
+  color: #333333;
+  font: 14px sans-serif;
+  margin: 0;
+  padding: 16px;
+}
+
+div {
+  padding: 6px;
+  margin-bottom: 4px;
+}
+
+.linked {
+  background: #ffffff;
+  color: #222222;
+}
+
+/* Native nesting: a rule's own declarations sit before a nested block. */
+.nested {
+  background: #fafafa;
+  color: #333333;
+  & .deep {
+    background: #eeeeee;
+    color: #444444;
+  }
+}
+
+.modern {
+  color: oklch(0.45 0.2 265);
+  background: rgb(255 255 255);
+}
+
+.alpha8 {
+  background: #0e74ddcc;
+  color: #222222;
+}
+
+/* Translucent near-white is a scrim or a backdrop, and is deliberately left
+   light — darkening it would put a veil over the page. */
+.scrim {
+  background: #ffffffcc;
+}
+
+.token {
+  background: var(--panel);
+  color: #333333;
+}
+
+@layer base {
+  .layered {
+    background: #fafafa;
+    color: #333333;
+  }
+}
+
+.grad {
+  background-image: linear-gradient(90deg, #ffffff, #0e74dd);
+}
+
+.lightdark {
+  background: light-dark(#ffffff, #111111);
+  color: light-dark(#111111, #eeeeee);
+}
+
+/* A data URI carries colors that must not be rewritten — the value is not CSS. */
+.urlbg {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><rect width='4' height='4' fill='%23ffffff'/></svg>");
+}
+
+/* An id selector that looks like a hex literal. */
+#abc {
+  padding-left: 7px;
+  background: #ffffff;
+}
+
+/* `gray` appears inside an identifier here, not as a value. */
+.keyword {
+  background: white;
+  color: black;
+  border-left: 3px solid var(--component-color-border-gray);
+}

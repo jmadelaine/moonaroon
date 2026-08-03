@@ -519,154 +519,116 @@ restoring the page to the theme rather than to the site.
     write this loop and looks tidier**, which is exactly why it needs saying —
     the cost is invisible at the call site.
 
-## How to test (the reliable harness)
-
-There is no automated test suite; verification is manual via headless Chrome.
-
-### Color math in Node
-
-The **color math only** runs headless — slice the file at the `Reading
-stylesheets` banner. Everything past it needs a DOM (`parseColor` paints into a
-`<canvas>`), so `remapValue` and `buildOverlay` can NOT be unit-tested this way;
-they belong in the browser fixture below.
-
-```js
-const src = fs
-  .readFileSync("content.js", "utf8")
-  .split("// " + "-".repeat(75) + "\n// Reading stylesheets")[0];
-// A Function wrapper, not eval: both this file and the slice declare top-level
-// names like rgbToHsl, and re-declaring one is a SyntaxError that kills the
-// whole script.
-const M = new Function(src + "\nreturn {rgbToHsl,vividFor,remapRgb,VIVID_INK};")();
-```
-
-Good for sweeping a table of hues through `vividFor` and printing chroma and
-contrast per tuning — which is how the `VIVID_INK` numbers were settled, and the
-only way to see that a change helps one hue and hurts another.
-
-### Render-test over HTTP
-
-Never `file://` (gotcha 1). Serve a directory and point headless Chrome at it:
+## How to test
 
 ```
-python3 -m http.server 8731
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless \
-  --disable-gpu --window-size=1440,2200 --virtual-time-budget=9000 \
-  --screenshot=out.png "http://localhost:8731/test.html"
+npm test              # both layers
+npm run test:color    # node --test, pure arithmetic, ~50ms
+npm run test:browser  # real Chromium, 5 pages, ~10s
 ```
 
-The page under test loads a copy of `content.js` with the `chrome.storage` wiring
-stripped (`src.split("// Initial state")[0]`) and `applyDark()` appended, since
-there's no extension runtime to supply the state.
+Both run in CI on push and PR. No dependencies: `package.json` carries scripts
+and nothing else, and the extension itself stays a plain folder Chrome can load
+as-is.
 
-Against a **real saved page** ("Save Page As → Web Page, Complete"): **copy the
-capture to a throwaway dir and test there — never generate test files inside the
-original capture folder.** A cleanup glob in that folder deletes the capture
-itself, and `rm` does not go to Trash. Captures are the developer's own and are
-**not** committed. Strip the page's own `<script>`s, which hang headless, and
-inject the script into the iframe sub-pages too to simulate `all_frames`.
+### Two layers, because the code has two halves
 
-### Synthetic fixture
+`test/color.test.js` covers everything above the `Reading stylesheets` banner —
+pure arithmetic, loaded by `test/slice.js` through a `Function` wrapper. Below
+that banner the transform needs a DOM (`parseColor` paints into a `<canvas>`,
+`buildOverlay` walks live CSSOM rule objects), so it is covered in a browser.
 
-A saved capture isn't needed to test the transform itself. A small fixture served
-over HTTP, exercising one construct per element (native nesting, `oklch()`,
-space-separated `rgb()`, 8-digit hex, `var()` tokens, `@layer`, `@keyframes`,
-gradients, `light-dark()`, `media="print"`, a `<style>` populated only by
-`insertRule`), plus a driver that reports `getComputedStyle` for each, gives a
-a matrix of what the transform reaches.
+**Use real Chromium, never jsdom or a CSSOM shim.** A shim has no canvas 2D
+context, no `replaceSync`, no native nesting, no `CSSLayerBlockRule` — precisely
+the constructs this transform exists to handle. It would fail on valid CSS and
+pass on CSS a browser rejects.
 
-**For anything touching roles or the ink pairing, measure contrast, don't look at
-a screenshot.** A second fixture covers one background/text arrangement per row —
-dark bg with same-rule text, dark bg with the text on a *descendant* rule, dark bg
-with inherited text only, bright brand bg with a white label, the same with a
-black label, a colored panel with accent text, a plain light card, and three light
-grays that must stay distinguishable from each other. The driver walks up to the
-first opaque background, computes the WCAG ratio against the element's own text,
-and prints `bg / text / ratio` per row with a `FAIL` marker under 3:1. That's what
-caught the descendant-rule case at 1.04:1, which reads as an ordinary dark bar in
-a screenshot. Run the same snapshot again after `removeDark()` to confirm every
-value returns to the light-theme original.
+`test/browser/run.js` serves the repo, spawns one Chrome per case with its own
+ephemeral profile, and collects results by POST. **POST rather than
+`--dump-dom`**, which serializes at load and so misses anything behind a timer or
+a fetch. `/theme.js` is synthesized on the fly — `content.js` minus its
+`chrome.storage` wiring — so the tests always run the working tree with no build
+step and no temp files. It kills only the process it spawned; never `pkill`
+Chrome, which would take out the developer's own session.
 
-### Overlay equivalence
+### Assert relationships, not values
 
-`pollTrackedSheets` has two paths to the same CSS, so the fixture asserts they
-agree: drive a `<style>` through `insertRule`/`deleteRule`, call the poller, and
-compare the accumulated `tracked.css` against a fresh `buildOverlay` of the same
-rules. Cover append-only over several ticks, a mid-list insert, a `deleteRule`,
-an append after a delete, and an appended `@media` block — the last three are the
-fallback path, and the mid-list insert is the one that silently emits the wrong
-rules if the `tail` check is ever dropped. Assert `overlay.textContent` matches
-the accumulated string too, or the two can drift without any visible symptom.
+The tuning constants are meant to move. A test pinned to `#0e74dd -> #3599ff`
+fails on every honest retune and teaches people to ignore failures. So the suite
+asserts things that must hold whatever the constants say: hue survives, a neutral
+background is never light, surfaces stay ordered and distinct, the contrast climb
+terminates and reaches its floor for every hue, ink is never dimmer than the same
+color as a fill.
 
-### Dynamic inline styles
+Exactly one test is pinned, and it is labelled `[characterisation]`. **A change
+there is a decision to review, not a bug to fix** — read the diff, and if the new
+palette is what you meant, update the table.
 
-The static fixtures cannot see gotchas 7c and 7d, because everything they contain
-is present before the first `scan()`. Cover the dynamic half separately: after the
-last retry timer (2500ms) has passed, add an element with an inline style and no
-styled descendants, add one that *has* a styled descendant, set a `style`
-attribute on an element that had none, touch a single unrelated property on an
-element already themed, and rewrite a whole `style` attribute. Then call
-`removeDark()` and assert every element is back to its authored value — that last
-step is what catches a `written` record that never matches, since the theme still
-looks right until teardown.
+### The cases, and what each is the only guard against
 
-Include a dark inline box (`background:#4b4a4a;color:#fff`) and check the label
-stays light. And note that a forced light label is `INK_LIGHT`, not `#ffffff` —
-asserting pure white there fails against correct output.
+| page | catches |
+| --- | --- |
+| `constructs.html` | a construct the parser reaches but a regex would not: nesting, `oklch()`, 8-digit hex, `var()` tokens, `@layer`, gradients, `light-dark()`, `insertRule`-only sheets. Also the never-touch rules — `url()` intact, `#abc` still matching, `var(--…-gray)` still valid |
+| `pairing.html` | a background and its text disagreeing. Measures the real WCAG ratio against the nearest opaque ancestor background |
+| `roundtrip.html` | bookkeeping. `applyDark` → `removeDark` must return every computed color to its authored value, leave no injected node or mark, and a second apply must reproduce the first |
+| `inline-dynamic.html` | the observer. Everything in it happens **after the 2500ms retry timer**, so only the observer can reach it — a fixture built before the first `scan()` is themed by the initial sweep whether the observer works or not |
+| `overlay-equivalence.html` | the incremental poller. Both routes to the overlay must produce identical CSS, including the mid-list-insert fallback |
 
-### Testing the popup
+**Screenshots are for judging taste, not for testing.** Every defect found so far
+was caught by comparing numbers, and every one of them looked correct in a
+render: text at 1.04:1 reads as an ordinary dark bar; a decayed `written` record
+leaves the themed page perfect and only shows up at teardown.
 
-`popup.html` renders outside the extension if a stub is injected **before**
-`strings.js`, since the only APIs it needs are `chrome.storage.sync`,
-`chrome.i18n.getUILanguage` and `chrome.runtime.getManifest`. Back the storage
-stub with a plain object and the popup is fully interactive.
+**`rgba(0, 0, 0, 0)` reads as pure black** to any naive lightness check, so
+"transparent because nothing applied" and "correctly themed dark" look identical.
+`T.bgOf` walks up to the first opaque background, and every assertion reports the
+raw values alongside its verdict.
 
-Drive it from a second script that dispatches `submit` on the form and clicks the
-remove buttons, then writes the resulting host list into a `<pre>` and screenshot
-that — the same trick the theme fixture uses, and it works because everything
-here is synchronous. Worth covering: a pasted full URL, `www.`, `*.`, a trailing
-dot, a duplicate, a subdomain of an existing entry, and a non-host. Render the
-empty list and the Japanese strings too — Japanese is the wider script, and it's
-what clipped the input placeholder at 300px.
+### Check that a test can fail
 
-Harness details worth knowing before they cost an afternoon:
+A guard that cannot fail is worse than none — it reads as coverage. After adding
+one, break the thing it protects and confirm it goes red. Reverting the root
+check in `processInlineStyles` should cost 5 assertions; dropping the `tail`
+guard, 1; removing the surface role from neutrals, 3 in Node and 4 in the browser.
 
-- **A driver script cannot reuse any top-level name from `content.js`.** Both are
-  classic scripts sharing one global lexical scope, so re-declaring any top-level
-  name is a `SyntaxError` that kills the *entire* driver file before its first
-  line runs — with no console output and no `error` event. Wrap the driver in an
-  IIFE.
-- **`--dump-dom` serializes at load, ignoring `--virtual-time-budget`.** Anything
-  behind a `setTimeout` or a `fetch` is missing. Either keep assertions
-  synchronous, or have the driver POST results to the test server (which honours
-  the virtual-time budget when paired with `--screenshot`). `--screenshot=/dev/null`
-  makes the run fail — use a real path.
-- **Assert teardown after a delay, not synchronously.** Some style changes settle
-  a tick late — re-enabling a disabled `<link>`, for one: right after
-  `link.disabled = false` the sheet is absent from `document.styleSheets` and
-  computed colors read as transparent. Reading immediately after `removeDark()`
-  reports a revert failure that isn't one.
-- **To screenshot the splash, freeze it.** One screenshot per run only catches one
-  moment, and virtual time doesn't let you pick which. Instead call `playSplash`
-  from the driver, then `el.getAnimations()[0].pause()` and set `currentTime` to
-  the frame you want. Note the cover `setTimeout` still fires on its own clock, so
-  the theme may already be applied in a frame taken "early" — a harness artifact.
-- **In headless, `innerHeight` is smaller than `--window-size`'s height**, and
-  `--screenshot` captures the full page. A viewport-centred fixed element is
-  therefore *not* at the centre of the resulting PNG. Read
-  `getBoundingClientRect()` before calling it a positioning bug.
-- **`rgba(0, 0, 0, 0)` reads as "dark"** in any naive lightness check, so
-  "transparent because nothing applied" and "correctly themed dark" look
-  identical. Report the raw value alongside the verdict.
+### Against a real saved page
 
-Testing hygiene:
+For layout questions the fixtures cannot answer, save a page ("Save Page As →
+Web Page, Complete"), **copy it to a throwaway directory and test there — never
+generate test files inside the original capture folder.** A cleanup glob in that
+folder deletes the capture itself, and `rm` does not go to Trash. Captures are
+the developer's own and are **not** committed. Strip the page's own `<script>`s,
+which hang headless, and inject the theme into the iframe sub-pages too to
+simulate `all_frames`.
 
-- **Never `pkill` Chrome** to clean up — it kills the developer's real browser
-  session. A one-off `--headless` invocation uses an ephemeral profile and exits on
-  its own; just let it. (`pkill -f http.server` is fine — that's only the test server.)
-- Caveat: a saved page can mislead. `file://` breaks `fetch`/cross-origin (see gotcha
-  1), and a page-save tool serializes CSS-in-JS into `textContent`, hiding the live
-  `insertRule` behavior (gotcha 3a). Confirm anything layout-related on the live site.
+Two things a saved page still gets wrong: a page-save tool serializes CSS-in-JS
+into `textContent`, hiding the live `insertRule` behavior (gotcha 3a), and
+`file://` breaks `fetch` and cross-origin reads (gotcha 1). Confirm anything
+layout-related on the live site.
+
+### Harness details worth knowing before they cost an afternoon
+
+- **A case page cannot reuse any top-level name from `content.js`.** Both are
+  classic scripts sharing one global lexical scope, so re-declaring one is a
+  `SyntaxError` that kills the entire file before its first line runs — with no
+  console output and no `error` event. Wrap case code in an IIFE; the harness
+  exposes a single global, `T`.
+- **Assert teardown after a delay.** Some style changes settle a tick late — right
+  after `link.disabled = false` the sheet is absent from `document.styleSheets`
+  and computed colors read as transparent. Reading immediately after
+  `removeDark()` reports a revert failure that is not one.
+- **A forced light label is `INK_LIGHT`, not `#ffffff`.** Asserting pure white
+  there fails against correct output.
+- **To screenshot the splash, freeze it.** One screenshot catches one moment and
+  virtual time does not let you choose which. Call `playSplash`, then
+  `el.getAnimations()[0].pause()` and set `currentTime`. The cover `setTimeout`
+  still runs on its own clock, so the theme may already be applied in a frame
+  taken "early" — a harness artifact, not a bug.
+- **In headless, `innerHeight` is smaller than `--window-size`**, and
+  `--screenshot` captures the full page, so a viewport-centred fixed element is
+  not at the centre of the PNG. Read `getBoundingClientRect()` before calling it
+  a positioning bug. `--screenshot=/dev/null` makes the run fail — use a real
+  path.
 
 ## Tuning knobs
 
@@ -710,7 +672,12 @@ Testing hygiene:
 
 ## Conventions
 
-- Plain ES (no build step, no deps). Keep `content.js` self-contained.
+- Plain ES (no build step, no deps). Keep `content.js` self-contained. `test/` may
+  use Node built-ins; it must not add a dependency either.
 - Match the existing comment density — explain _why_, especially around the gotchas.
-- After any change, run `node --check content.js` and do an HTTP render-test before
-  claiming it works.
+- After any change, run `npm test`. Add a case for anything a fixture could have
+  caught, and break the code once to prove the new case fails.
+- The suite covers color behaviour, which is what the extension is. Storage, the
+  site list and the popup are deliberately out of scope: they are plumbing, they
+  need an extension runtime to test honestly, and they are not where the bugs
+  have been.

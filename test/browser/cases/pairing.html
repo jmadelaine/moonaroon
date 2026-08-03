@@ -1,0 +1,94 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>pairing</title>
+<style>
+  body { background: #f5f6f7; color: #333; font: 14px sans-serif; margin: 0; padding: 12px; }
+  .row { padding: 8px; margin-bottom: 6px; }
+
+  /* A bar the site paints dark in its LIGHT theme, with the label in the same
+     rule. Inverting the background makes a glaring light slab. */
+  .same-rule { background: #4b4a4a; color: #ffffff; }
+
+  /* The same, with the label in a separate rule. Nothing static can pair these,
+     so the only thing that saves it is that light ink is left as authored. */
+  .split { background: #3a3a3a; }
+  .split .title { color: #f0f0f0; }
+
+  /* Dark bar, label inherited from an ancestor. */
+  .inherited { background: #2b2b2b; }
+
+  /* A brand fill comes out far brighter than authored, so a white label on it
+     no longer reads and the text has to be restated. */
+  .brand { background: #0e74dd; color: #ffffff; display: inline-block; padding: 6px 12px; }
+  .amber { background: #f5a623; color: #000000; display: inline-block; padding: 6px 12px; }
+
+  /* Colored text on a colored panel: keep the accent if it still reads. */
+  .panel { background: #fdecea; color: #b3261e; }
+
+  /* The ordinary case, which must be left alone: a light background inverts to
+     dark and its dark text inverts to light, already correct. */
+  .card { background: #ffffff; color: #333333; }
+
+  /* Three light greys that must not collapse onto each other. */
+  .s1 { background: #ffffff; } .s2 { background: #f0f0f0; } .s3 { background: #e0e0e0; }
+
+  /* Text over an image: no color token to read, so light ink must survive. */
+  .hero {
+    color: #ffffff;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><rect width='4' height='4' fill='%23333'/></svg>");
+  }
+</style>
+<body>
+  <div class="row same-rule">same-rule label</div>
+  <div class="row split"><span class="title">label on a descendant rule</span></div>
+  <div class="row inherited">inherited label</div>
+  <div class="row"><span class="brand">brand</span> <span class="amber">amber</span></div>
+  <div class="row panel">accent text on a colored panel</div>
+  <div class="row card">ordinary card</div>
+  <div class="row s1">#fff</div><div class="row s2">#f0f0f0</div><div class="row s3">#e0e0e0</div>
+  <div class="row hero">text over an image</div>
+
+  <script src="/test/browser/harness.js"></script>
+  <script src="/theme.js"></script>
+  <script>
+    (function () {
+      applyDark();
+      setTimeout(function () {
+        const q = (s) => document.querySelector(s);
+        const bg = (s) => getComputedStyle(q(s)).backgroundColor;
+
+        // Legibility. Text is held to the same floor the theme holds itself to.
+        T.readable("dark bar, label in the same rule", q(".same-rule"), 4);
+        T.readable("dark bar, label on a descendant rule", q(".split .title"), 4);
+        T.readable("dark bar, label inherited", q(".inherited"), 4);
+        T.readable("brand fill", q(".brand"), 4);
+        T.readable("amber fill with a black label", q(".amber"), 4);
+        T.readable("accent text on a colored panel", q(".panel"), 4);
+        T.readable("ordinary card", q(".card"), 4);
+        T.readable("text over a background image", q(".hero"), 4);
+
+        // A bar the site meant to be dark stays dark, rather than inverting.
+        T.ok("dark bar stays dark", T.dark(bg(".same-rule")), `background=${bg(".same-rule")}`);
+        T.ok("split dark bar stays dark", T.dark(bg(".split")), `background=${bg(".split")}`);
+
+        // The accent survives rather than being flattened to plain ink.
+        const pc = getComputedStyle(q(".panel")).color.match(/\d+/g).map(Number);
+        T.ok(
+          "colored text on a colored panel keeps its hue",
+          Math.max(...pc) - Math.min(...pc) > 40,
+          `color=${getComputedStyle(q(".panel")).color} (a neutral would have no spread)`,
+        );
+
+        // Surfaces stay ordered and distinct.
+        const l = [".s1", ".s2", ".s3"].map((s) => T.lum(bg(s)));
+        T.ok(
+          "three light greys stay distinguishable",
+          l[1] > l[0] * 1.05 && l[2] > l[1] * 1.05,
+          `luminances ${l.map((x) => x.toFixed(4)).join(" < ")}`,
+        );
+
+        T.done();
+      }, 900);
+    })();
+  </script>
+</body>
