@@ -510,9 +510,16 @@ const CAND_RE = new RegExp(
   "gi",
 );
 
+// Every color notation contains a `#`, a `(`, or a run of at least three
+// letters — hex, a color function, or a named color. A value with none of them
+// holds no color, which spares the three regex passes below for the numeric
+// custom properties a design system is mostly made of (`--space-4: 16px`).
+const MAYBE_COLOR = /[#(]|[a-z]{3}/i;
+
 // Rewrite color tokens inside a composite value (gradients, custom properties).
 // Returns null when nothing changed.
 function remapTokens(value, baseHref, role) {
+  if (!MAYBE_COLOR.test(value)) return null;
   const stash = [];
   const hold = (s) => {
     stash.push(s);
@@ -559,19 +566,32 @@ const PROP_ROLE = new Map([
   ["stroke", ROLE_INK],
 ]);
 
+// Could this property hold a color at all? Callers use it to skip a declaration
+// before touching the CSSOM or running any regex over its value.
+function isColorProp(prop) {
+  return (
+    DIRECT_COLOR.has(prop) || COMPOSITE_COLOR.has(prop) || prop.startsWith("--")
+  );
+}
+
 // Remap one declaration's value. Returns null when it should stay as authored.
+//
+// The property is checked before the value: SKIP_VALUE is the priciest test
+// here, and there's no point running it over a `background-repeat`.
 function remapValue(prop, value, baseHref) {
-  if (!value || SKIP_VALUE.test(value)) return null;
+  if (!value || !isColorProp(prop)) return null;
   const custom = prop.startsWith("--");
+  const direct = DIRECT_COLOR.has(prop);
+  const composite = COMPOSITE_COLOR.has(prop);
+  if (SKIP_VALUE.test(value)) return null;
   const role = PROP_ROLE.get(prop) ?? ROLE_LINE;
-  if (DIRECT_COLOR.has(prop) || custom) {
+  if (direct || custom) {
     const parsed = parseColor(value.trim());
     // A custom property holding a bare color is the highest-value case there
     // is: remapping the token at its definition themes every use of it at once.
     if (parsed) return remapParsed(parsed, role);
   }
-  if (COMPOSITE_COLOR.has(prop) || custom)
-    return remapTokens(value, baseHref, role);
+  if (composite || custom) return remapTokens(value, baseHref, role);
   return null;
 }
 
@@ -611,24 +631,31 @@ function inkOverride(value, block) {
 }
 
 // Serialize just the declarations of `style` whose colors changed.
+//
+// The property name is tested before anything is read off the style block. Most
+// declarations here are longhands the CSSOM invented while expanding a shorthand
+// (`background:#fff` arrives as nine, eight of them filler), and every
+// getPropertyValue/getPropertyPriority is a crossing into the CSSOM — by far the
+// most expensive thing in this loop. A Set lookup skips both.
 function changedDecls(style, baseHref) {
   const block = inkForBlock(style);
   let out = "";
   let restated = false;
   for (const prop of style) {
-    const value = style.getPropertyValue(prop);
-    const priority = style.getPropertyPriority(prop);
     if (prop === "color" && block) {
       restated = true;
-      out += `color:${inkOverride(value, block)}${
+      const priority = style.getPropertyPriority(prop);
+      out += `color:${inkOverride(style.getPropertyValue(prop), block)}${
         priority ? " !" + priority : ""
       };`;
       continue;
     }
-    const next = remapValue(prop, value, baseHref);
+    if (!isColorProp(prop)) continue;
+    const next = remapValue(prop, style.getPropertyValue(prop), baseHref);
     if (next === null) continue;
     // Match the original's priority rather than fight it: equal specificity and
     // equal priority means later source order wins, and the overlay is later.
+    const priority = style.getPropertyPriority(prop);
     out += `${prop}:${next}${priority ? " !" + priority : ""};`;
   }
   // A rule that paints a background but names no text color still needs one:
@@ -746,9 +773,9 @@ function insertOverlay(css, cursor, media, from) {
   const style = document.createElement("style");
   style.setAttribute(GEN, "1");
   if (from) style.setAttribute("data-moonaroon-from", from);
-  // Keep the source's media scope. Without this a media="print" sheet would
-  // apply on screen — the print stylesheet forces the cloud header to
-  // position:static, which overrides its fixed positioning and breaks the layout.
+  // Keep the source's media scope. Without it a media="print" sheet applies on
+  // screen, and print rules routinely force headers to position:static, which
+  // overrides the fixed positioning the screen layout depends on.
   if (media) style.media = media;
   style.textContent = css;
   cursor.node.parentNode.insertBefore(style, cursor.node.nextSibling);
@@ -819,17 +846,29 @@ function processStyleEl(styleEl) {
   const cursor = { node: styleEl };
   // Always create the node, even when empty: CSS-in-JS sheets start with no
   // rules, and this reserves their overlay's place in the cascade.
-  const overlay = insertOverlay(
-    buildOverlay(rules, base),
-    cursor,
-    styleEl.media,
-    null,
-  );
-  trackedSheets.push({ sheet, base, overlay, count: rules.length });
+  const css = buildOverlay(rules, base);
+  const overlay = insertOverlay(css, cursor, styleEl.media, null);
+  trackedSheets.push({
+    sheet,
+    base,
+    overlay,
+    css,
+    count: rules.length,
+    tail: rules.length ? rules[rules.length - 1].cssText : "",
+  });
 }
 
 // CSS-in-JS appends rules through insertRule, which fires no DOM mutation, so
 // the observer never sees them. Watch the rule count instead.
+// CSS-in-JS grows a sheet a rule at a time, so this runs on a timer — insertRule
+// fires no DOM mutation for the observer to see.
+//
+// The overlay is extended, not rebuilt. A library that adds one component's rule
+// per render walks past thousands of unchanged rules otherwise, on every tick,
+// for as long as the page is open. insertRule can splice into the middle as well
+// as append, so an index alone can't be trusted: `tail` holds the last rule's
+// text from the previous pass, and the fast path is taken only when the rule now
+// at that index still matches. Anything else falls back to a full rebuild.
 function pollTrackedSheets() {
   for (const tracked of trackedSheets) {
     let rules;
@@ -839,10 +878,21 @@ function pollTrackedSheets() {
       continue;
     }
     if (rules.length === tracked.count) continue;
+    const appendedOnly =
+      rules.length > tracked.count &&
+      (tracked.count === 0 ||
+        rules[tracked.count - 1].cssText === tracked.tail);
+    if (appendedOnly) {
+      for (let i = tracked.count; i < rules.length; i++)
+        tracked.css += emitRule(rules[i], tracked.base);
+    } else {
+      tracked.css = buildOverlay(rules, tracked.base);
+    }
     tracked.count = rules.length;
-    const css = buildOverlay(rules, tracked.base);
+    tracked.tail = rules.length ? rules[rules.length - 1].cssText : "";
     // Writing to our own overlay is safe — it holds plain text, not CSSOM rules.
-    if (css !== tracked.overlay.textContent) tracked.overlay.textContent = css;
+    if (tracked.css !== tracked.overlay.textContent)
+      tracked.overlay.textContent = tracked.css;
   }
 }
 
@@ -873,9 +923,15 @@ function withPaused(fn) {
 
 // Rewrite inline style="" attributes (some colors are set via JS at runtime).
 function processInlineStyles(root) {
-  const els = root.querySelectorAll ? root.querySelectorAll("[style]") : [];
+  if (!root.querySelectorAll) return;
+  // Let the selector engine drop the elements we've already handled. scan() runs
+  // this over the whole document six times per apply, so on a page with a few
+  // thousand styled elements the difference is thousands of native matches
+  // against thousands of JS attribute reads.
+  const els = root.querySelectorAll(
+    `[style]:not([${PROCESSED}]):not([${GEN}])`,
+  );
   for (const el of els) {
-    if (el.getAttribute(PROCESSED) || el.getAttribute(GEN)) continue;
     let changed = false;
     // Same background/text pairing as a stylesheet rule. An inline background is
     // if anything more likely to be a hand-placed dark box than a rule is.

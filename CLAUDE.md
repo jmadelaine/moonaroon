@@ -212,6 +212,17 @@ CSS reading & rewriting
   positive like `repeat` is simply rejected. That inverts the usual risk: a regex
   run loose over whole stylesheet text would silently corrupt CSS; scoped to one
   value and validated, a sloppy regex costs nothing.
+
+  `MAYBE_COLOR` guards the three regex passes below it. Every color notation
+  contains a `#`, a `(`, or a run of three letters — hex, a function, or a named
+  color — so a value with none of them cannot hold one. That is what keeps the
+  numeric half of a design system (`--space-4: 16px`, `--z-10: 100`) out of the
+  expensive path.
+
+- `changedDecls(style, baseHref)` / `isColorProp(prop)` — serialize the changed
+  declarations of one block. **Test the property name first; read the CSSOM
+  last.** See gotcha 19 — this ordering is worth ~40% of the whole sheet walk and
+  reads like a stylistic choice, so it is easy to undo by accident.
 - `emitRule(rule, baseHref)` / `buildOverlay(rules, baseHref)` — recursive walk
   emitting only changed declarations, mirroring selector / at-rule / `@layer`
   structure. Grouping rules all expose `cssRules`, so one recursion covers
@@ -221,14 +232,33 @@ CSS reading & rewriting
   and its imports land in source order rather than reversed.
 - `processStyleEl(styleEl)` — reads the element's **live** `sheet.cssRules`
   (same-origin, no fetch) and writes a separate overlay, so its `textContent` is
-  never touched. `pollTrackedSheets` re-checks `cssRules.length` on a timer.
+  never touched. Records `css`, `count` and `tail` on the tracked entry for the
+  poller.
+- `pollTrackedSheets()` — a timer, because `insertRule` fires no DOM mutation for
+  the observer to see. It **extends** each overlay rather than rebuilding it: a
+  library that adds one rule per render would otherwise walk every rule it has
+  ever added, on every tick, for as long as the page is open. Only rules past
+  `count` are emitted and appended to the accumulated `css`.
+
+  `insertRule` can splice into the middle as well as append, so an index alone
+  proves nothing. `tail` holds the previous pass's last rule text, and the
+  append-only path is taken **only** when the rule now sitting at that index
+  still matches it. Everything else — a mid-list insert, a `deleteRule`, a reset
+  — falls back to a full `buildOverlay`. Both paths must produce identical CSS;
+  the poll fixture asserts exactly that.
 
 Apply / observe / remove
 
 - `applyDark()` — injects the base style (canvas background + `OVERRIDES`), runs
   `scan()`, and starts a `MutationObserver` for dynamically added sheets/styles/
   inline styles. Also re-scans on `DOMContentLoaded`, `load`, and a few timers.
-- `scan()` / `processLink` / `processStyleEl` / `processInlineStyles` — do the work.
+- `scan()` / `processLink` / `processStyleEl` / `processInlineStyles` — do the
+  work. `scan()` runs six times per apply (immediately, on `DOMContentLoaded`, on
+  `load`, and on three timers), so each of these has to be near-free once there
+  is nothing left to do. `processInlineStyles` gets that from its selector —
+  `[style]:not([data-moonaroon]):not([data-moonaroon-gen])` — which lets the
+  selector engine reject handled elements instead of two `getAttribute` calls per
+  element in JS.
 - `withPaused(fn)` — runs DOM-mutating work with the observer disconnected +
   `takeRecords()` so our own writes don't feed back in.
 - `removeDark()` — removes injected styles, re-enables originals, restores inline
@@ -446,6 +476,21 @@ gotcha 13.)
     `applied` and returns early when nothing changed. The same fact is why
     `splashWanted()` checks `document.visibilityState`.
 
+19. **In the per-declaration path, order the tests by what they cost:
+    property name, then value text, then the CSSOM.** A rule's declarations are
+    mostly longhands the CSSOM invented while expanding a shorthand —
+    `background:#fff` arrives as nine, eight of them filler — so the great
+    majority of what this loop sees can never hold a color. `isColorProp` is a
+    Set lookup; `SKIP_VALUE` is a regex over text; `getPropertyValue` and
+    `getPropertyPriority` are crossings into the CSSOM and cost the most by far.
+    `changedDecls` therefore checks the name before reading anything, and reads
+    the priority only once a declaration is definitely being emitted.
+
+    Measured on a 2400-rule sheet: 204,321 CSSOM property reads against 35,823,
+    and 31.3ms against 18.2ms. **Reading the value up front is the natural way to
+    write this loop and looks tidier**, which is exactly why it needs saying —
+    the cost is invisible at the call site.
+
 ## How to test (the reliable harness)
 
 There is no automated test suite; verification is manual via headless Chrome.
@@ -513,6 +558,17 @@ and prints `bg / text / ratio` per row with a `FAIL` marker under 3:1. That's wh
 caught the descendant-rule case at 1.04:1, which reads as an ordinary dark bar in
 a screenshot. Run the same snapshot again after `removeDark()` to confirm every
 value returns to the light-theme original.
+
+### Overlay equivalence
+
+`pollTrackedSheets` has two paths to the same CSS, so the fixture asserts they
+agree: drive a `<style>` through `insertRule`/`deleteRule`, call the poller, and
+compare the accumulated `tracked.css` against a fresh `buildOverlay` of the same
+rules. Cover append-only over several ticks, a mid-list insert, a `deleteRule`,
+an append after a delete, and an appended `@media` block — the last three are the
+fallback path, and the mid-list insert is the one that silently emits the wrong
+rules if the `tail` check is ever dropped. Assert `overlay.textContent` matches
+the accumulated string too, or the two can drift without any visible symptom.
 
 ### Testing the popup
 
